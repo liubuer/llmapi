@@ -1,10 +1,12 @@
-# 使用Python官方镜像
+# 内部AI工具API - Docker镜像
+# 企业环境优化版
+
 FROM python:3.11-slim
 
 # 设置工作目录
 WORKDIR /app
 
-# 安装系统依赖
+# 安装系统依赖（Playwright需要）
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -26,6 +28,7 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     libpango-1.0-0 \
     libcairo2 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
@@ -34,22 +37,30 @@ COPY requirements.txt .
 # 安装Python依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 安装Playwright浏览器
+# 安装Playwright Chromium
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
 # 复制应用代码
 COPY . .
 
-# 创建日志目录
-RUN mkdir -p logs auth_state
+# 创建必要的目录
+RUN mkdir -p logs auth_state browser_data
+
+# 设置权限
+RUN chmod +x start.sh
 
 # 暴露端口
 EXPOSE 8000
 
-# 设置环境变量
+# 环境变量
 ENV PYTHONUNBUFFERED=1
 ENV BROWSER_HEADLESS=true
+ENV USE_PERSISTENT_CONTEXT=true
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # 启动命令
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 内部AI工具API启动脚本
+# 内部AI工具API启动脚本 - 企业环境优化版
 
 set -e
 
@@ -12,24 +12,12 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# 打印带颜色的消息
-print_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_blue() {
-    echo -e "${BLUE}$1${NC}"
-}
+print_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+print_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_blue() { echo -e "${BLUE}$1${NC}"; }
 
 # 检查Python环境
 check_python() {
@@ -44,71 +32,56 @@ check_python() {
 check_dependencies() {
     print_info "检查依赖..."
     
-    # 检查虚拟环境
     if [ ! -d "venv" ]; then
         print_warn "虚拟环境不存在，正在创建..."
         python3 -m venv venv
     fi
     
-    # 激活虚拟环境
     source venv/bin/activate
-    
-    # 安装依赖
     pip install -q -r requirements.txt
     
-    # 安装Playwright浏览器
-    if [ ! -d "$HOME/.cache/ms-playwright" ]; then
-        print_info "安装Playwright浏览器..."
-        playwright install chromium
+    # 检查Playwright浏览器
+    if ! python -c "from playwright.sync_api import sync_playwright" 2>/dev/null; then
+        print_info "安装Playwright..."
+        pip install playwright
     fi
+    
+    # 安装Chromium
+    print_info "确保Chromium浏览器已安装..."
+    playwright install chromium 2>/dev/null || true
 }
 
-# 检查认证状态
-check_auth() {
-    if [ ! -f "auth_state/state.json" ]; then
-        print_warn "未找到认证状态文件"
-        print_info "请先运行以下命令之一："
-        print_info "  ./start.sh import-edge  # 从Edge导入（推荐）"
-        print_info "  ./start.sh login        # 手动登录"
-        return 1
-    fi
-    return 0
-}
-
-# 从Edge导入登录状态
-import_edge() {
-    print_info "启动Edge登录状态导入工具..."
+# 检查登录状态
+check_login() {
     source venv/bin/activate
-    python tools/import_edge_session.py
-}
-
-# 检查Edge配置
-check_edge() {
-    print_info "检查Edge浏览器配置..."
-    source venv/bin/activate
-    python -m app.browser_manager --check-edge
+    python -m app.browser_manager --check
+    return $?
 }
 
 # 手动登录
 do_login() {
     print_info "启动手动登录流程..."
     source venv/bin/activate
-    python -m app.browser_manager --login
+    
+    if [ -n "$1" ]; then
+        python -m app.browser_manager --login "$1"
+    else
+        python -m app.browser_manager --login
+    fi
 }
 
-# 启动服务（使用Edge配置文件模式）
-start_with_edge() {
-    print_info "启动API服务（Edge配置文件模式）..."
-    print_warn "请确保已关闭所有Edge浏览器窗口！"
+# 测试浏览器
+test_browser() {
+    print_info "测试浏览器..."
     source venv/bin/activate
     
-    mkdir -p logs
+    export BROWSER_HEADLESS=false
     
-    # 设置环境变量启用Edge模式
-    export USE_EDGE_PROFILE=true
-    export EDGE_PROFILE="${1:-Default}"
-    
-    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    if [ -n "$1" ]; then
+        python -m app.browser_manager --test "$1"
+    else
+        python -m app.browser_manager --test
+    fi
 }
 
 # 启动服务
@@ -116,29 +89,41 @@ start_server() {
     print_info "启动API服务..."
     source venv/bin/activate
     
-    # 创建日志目录
     mkdir -p logs
     
-    # 启动服务
     uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 }
 
-# 启动服务（生产模式）
+# 生产模式启动
 start_production() {
     print_info "启动API服务（生产模式）..."
     source venv/bin/activate
     
     mkdir -p logs
     
-    # 使用多个worker
     uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 }
 
 # 分析页面
-analyze() {
+analyze_page() {
     print_info "启动页面分析工具..."
     source venv/bin/activate
     python tools/analyze_page.py "$@"
+}
+
+# 清理数据
+clean_data() {
+    print_warn "这将删除所有浏览器数据和登录状态！"
+    read -p "确认删除？(y/N): " confirm
+    
+    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+        source venv/bin/activate
+        python -m app.browser_manager --clean
+        rm -rf auth_state/
+        print_info "数据已清理"
+    else
+        print_info "已取消"
+    fi
 }
 
 # 运行测试
@@ -152,73 +137,75 @@ run_tests() {
 show_help() {
     echo ""
     print_blue "=========================================="
-    print_blue "    内部AI工具 API 启动脚本"
+    print_blue "    内部AI工具 API - 企业环境版"
     print_blue "=========================================="
     echo ""
-    echo "用法: ./start.sh [命令]"
+    echo "用法: ./start.sh [命令] [参数]"
     echo ""
-    echo "登录命令:"
-    echo "  import-edge   - 从Edge浏览器导入登录状态（推荐）"
-    echo "  check-edge    - 检查Edge浏览器配置"
-    echo "  login         - 手动登录并保存认证状态"
+    echo "首次使用命令:"
+    echo "  login [url]     手动登录并保存状态（首次必须执行）"
+    echo "  check           检查登录状态"
     echo ""
     echo "启动命令:"
-    echo "  start         - 启动API服务（开发模式，使用保存的状态）"
-    echo "  start-edge    - 启动API服务（直接使用Edge登录状态）"
-    echo "  production    - 启动API服务（生产模式）"
+    echo "  start           启动API服务（开发模式）"
+    echo "  production      启动API服务（生产模式）"
     echo ""
     echo "工具命令:"
-    echo "  analyze       - 分析AI工具页面结构"
-    echo "  test          - 运行测试"
-    echo "  help          - 显示此帮助信息"
+    echo "  test [url]      测试浏览器（可见模式）"
+    echo "  analyze         分析AI工具页面结构"
+    echo "  clean           清理所有浏览器数据"
+    echo "  help            显示此帮助"
     echo ""
-    echo "首次使用步骤（推荐）:"
-    echo "  1. ./start.sh import-edge   # 从Edge导入登录状态"
-    echo "  2. ./start.sh start         # 启动服务"
+    echo "首次使用步骤:"
+    echo "  1. ./start.sh login           # 打开浏览器，手动登录"
+    echo "  2. ./start.sh check           # 确认登录状态"
+    echo "  3. ./start.sh start           # 启动服务"
     echo ""
-    echo "或者使用Edge配置文件模式（无需导入）:"
-    echo "  1. 关闭所有Edge窗口"
-    echo "  2. ./start.sh start-edge    # 直接使用Edge登录状态启动"
+    echo "数据目录说明:"
+    echo "  ./browser_data/   浏览器数据（包含登录状态）"
+    echo "  ./auth_state/     认证状态备份"
+    echo "  ./logs/           日志文件"
     echo ""
 }
 
 # 主逻辑
 main() {
-    check_python
-    check_dependencies
-    
     case "${1:-help}" in
-        import-edge|import)
-            import_edge
-            ;;
-        check-edge)
-            check_edge
-            ;;
         login)
-            do_login
+            check_python
+            check_dependencies
+            do_login "$2"
+            ;;
+        check)
+            check_python
+            check_dependencies
+            check_login
             ;;
         start)
-            if check_auth; then
-                start_server
-            fi
-            ;;
-        start-edge)
-            shift
-            start_with_edge "$@"
+            check_python
+            check_dependencies
+            start_server
             ;;
         production)
-            if check_auth; then
-                start_production
-            fi
-            ;;
-        analyze)
-            shift
-            analyze "$@"
+            check_python
+            check_dependencies
+            start_production
             ;;
         test)
-            run_tests
+            check_python
+            check_dependencies
+            test_browser "$2"
             ;;
-        help|--help|-h)
+        analyze)
+            check_python
+            check_dependencies
+            shift
+            analyze_page "$@"
+            ;;
+        clean)
+            clean_data
+            ;;
+        help|--help|-h|"")
             show_help
             ;;
         *)
