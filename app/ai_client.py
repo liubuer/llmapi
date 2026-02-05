@@ -1,6 +1,6 @@
 """AI网页交互客户端"""
 import asyncio
-from typing import AsyncGenerator, List
+from typing import AsyncGenerator, List, Tuple
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +10,44 @@ from loguru import logger
 from .config import get_settings
 from .models import ChatMessage
 from .edge_manager import edge_manager, get_edge_manager
+
+
+# 大文本分割提示词模板
+CHUNK_TEMPLATE_FIRST = """下面将输入一份约{total_chars}字的资料，将分{total_parts}次输入。
+这是第1份资料（共{total_parts}份），约{part_chars}字。
+请你接收并记住这些内容，接收完后我将继续输入下一份资料。
+收到后请简短回复"已接收第1份"即可，无需其他内容。
+
+---资料开始---
+{content}
+---资料结束---"""
+
+CHUNK_TEMPLATE_MIDDLE = """这是第{part_num}份资料（共{total_parts}份），约{part_chars}字。
+请你接收并与之前的资料合并记忆，接收完后我将继续输入。
+收到后请简短回复"已接收第{part_num}份"即可，无需其他内容。
+
+---资料开始---
+{content}
+---资料结束---"""
+
+CHUNK_TEMPLATE_LAST = """这是最后一份资料（第{part_num}份，共{total_parts}份），约{part_chars}字。
+请你接收后，将所有{total_parts}份资料在记忆中合并成完整的一份。
+
+---资料开始---
+{content}
+---资料结束---
+
+资料接收完毕。现在请根据上述全部资料，回答以下问题：
+
+{question}"""
+
+CHUNK_TEMPLATE_LAST_NO_QUESTION = """这是最后一份资料（第{part_num}份，共{total_parts}份），约{part_chars}字。
+请你接收后，将所有{total_parts}份资料在记忆中合并成完整的一份。
+合并完成后，请简要概括这些资料的主要内容。
+
+---资料开始---
+{content}
+---资料结束---"""
 
 
 class AIClientError(Exception):
@@ -408,7 +446,7 @@ class AIClient:
         """格式化消息"""
         if len(messages) == 1 and messages[0].role == "user":
             return messages[0].content
-        
+
         parts = []
         for msg in messages:
             if msg.role == "system":
@@ -417,8 +455,207 @@ class AIClient:
                 parts.append(f"[用户]\n{msg.content}")
             elif msg.role == "assistant":
                 parts.append(f"[助手]\n{msg.content}")
-        
+
         return "\n\n".join(parts)
+
+    def _split_long_text(self, text: str, question: str = "") -> List[str]:
+        """
+        将长文本分割成多个块，并添加提示词模板
+
+        Args:
+            text: 要分割的长文本（背景资料）
+            question: 用户的问题（将在最后一块中提出）
+
+        Returns:
+            分割后的提示词列表
+        """
+        chunk_size = self.settings.chunk_size
+        total_chars = len(text)
+
+        # 如果文本不需要分割
+        if total_chars <= self.settings.max_input_chars:
+            return [text]
+
+        # 计算需要分割的块数
+        # 为模板预留空间（约500-1000字符）
+        effective_chunk_size = chunk_size - 500
+        num_chunks = (total_chars + effective_chunk_size - 1) // effective_chunk_size
+
+        logger.info(f"文本过长 ({total_chars} 字符)，将分割为 {num_chunks} 块")
+
+        chunks = []
+        start = 0
+
+        for i in range(num_chunks):
+            # 确定这一块的结束位置
+            if i == num_chunks - 1:
+                # 最后一块，取剩余所有内容
+                end = total_chars
+            else:
+                end = min(start + effective_chunk_size, total_chars)
+                # 尝试在句子边界处分割
+                boundary_chars = ['。', '！', '？', '\n', '.', '!', '?']
+                search_start = max(end - 200, start)
+                best_boundary = end
+                for bc in boundary_chars:
+                    pos = text.rfind(bc, search_start, end)
+                    if pos > search_start:
+                        best_boundary = pos + 1
+                        break
+                end = best_boundary
+
+            chunk_content = text[start:end]
+            part_chars = len(chunk_content)
+            part_num = i + 1
+
+            # 根据位置选择模板
+            if i == 0:
+                # 第一块
+                formatted = CHUNK_TEMPLATE_FIRST.format(
+                    total_chars=total_chars,
+                    total_parts=num_chunks,
+                    part_chars=part_chars,
+                    content=chunk_content
+                )
+            elif i == num_chunks - 1:
+                # 最后一块
+                if question:
+                    formatted = CHUNK_TEMPLATE_LAST.format(
+                        part_num=part_num,
+                        total_parts=num_chunks,
+                        part_chars=part_chars,
+                        content=chunk_content,
+                        question=question
+                    )
+                else:
+                    formatted = CHUNK_TEMPLATE_LAST_NO_QUESTION.format(
+                        part_num=part_num,
+                        total_parts=num_chunks,
+                        part_chars=part_chars,
+                        content=chunk_content
+                    )
+            else:
+                # 中间块
+                formatted = CHUNK_TEMPLATE_MIDDLE.format(
+                    part_num=part_num,
+                    total_parts=num_chunks,
+                    part_chars=part_chars,
+                    content=chunk_content
+                )
+
+            chunks.append(formatted)
+            logger.debug(f"块 {part_num}/{num_chunks}: {part_chars} 字符 (位置 {start}-{end})")
+            start = end
+
+        return chunks
+
+    def _extract_question_and_content(self, text: str) -> Tuple[str, str]:
+        """
+        从文本中提取问题和背景资料
+
+        尝试识别常见的问题标记，如：
+        - "问题：" / "问："
+        - "请回答："
+        - "Question:" / "Q:"
+        - 文本最后一段（如果较短）
+
+        Returns:
+            (背景资料, 问题)
+        """
+        # 尝试识别问题标记
+        question_markers = [
+            '问题：', '问题:', '问：', '问:',
+            '请回答：', '请回答:',
+            'Question:', 'question:', 'Q:', 'q:',
+            '请问', '请分析', '请总结', '请概括'
+        ]
+
+        for marker in question_markers:
+            if marker in text:
+                pos = text.rfind(marker)
+                # 检查问题部分是否在文本末尾（最后20%的位置）
+                if pos > len(text) * 0.8:
+                    content = text[:pos].strip()
+                    question = text[pos:].strip()
+                    logger.info(f"识别到问题标记: {marker}")
+                    return content, question
+
+        # 如果没有找到明确的问题标记，检查最后一段
+        paragraphs = text.strip().split('\n\n')
+        if len(paragraphs) > 1:
+            last_paragraph = paragraphs[-1].strip()
+            # 如果最后一段较短（小于500字符）且像是问题
+            if len(last_paragraph) < 500 and ('?' in last_paragraph or '？' in last_paragraph or '请' in last_paragraph):
+                content = '\n\n'.join(paragraphs[:-1])
+                return content, last_paragraph
+
+        # 无法识别问题，返回原文本
+        return text, ""
+
+    async def _send_chunked_messages(self, page: Page, chunks: List[str], stream: bool = False):
+        """
+        分批发送长文本
+
+        Args:
+            page: Playwright页面对象
+            chunks: 分割后的提示词列表
+            stream: 是否使用流式响应（仅最后一块使用）
+
+        Returns:
+            最后一块的响应（字符串或异步生成器）
+        """
+        total_chunks = len(chunks)
+        logger.info(f"开始分批发送，共 {total_chunks} 块")
+
+        for i, chunk in enumerate(chunks):
+            part_num = i + 1
+            is_last = (i == total_chunks - 1)
+
+            logger.info(f"发送第 {part_num}/{total_chunks} 块 ({len(chunk)} 字符)")
+
+            if is_last:
+                # 最后一块，根据stream参数决定响应方式
+                if stream:
+                    # 流式响应
+                    responses = page.locator(self.settings.selector_response)
+                    initial_count = await responses.count()
+
+                    input_box = await self._find_input(page)
+                    if not input_box:
+                        raise AIClientError("找不到输入框")
+
+                    await input_box.click()
+                    await page.evaluate("""(text) => {
+                        const el = document.querySelector('textarea') ||
+                                   document.querySelector('[contenteditable="true"]');
+                        if (el) {
+                            if (el.tagName === 'TEXTAREA') el.value = text;
+                            else el.innerText = text;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                    }""", chunk)
+                    await asyncio.sleep(0.3)
+                    await input_box.press("Control+Enter")
+
+                    return self._stream_response(page, sent_message=chunk, initial_count=initial_count)
+                else:
+                    # 非流式响应
+                    return await self._send_message(page, chunk)
+            else:
+                # 非最后一块，等待确认响应
+                response = await self._send_message(page, chunk)
+
+                # 检查响应是否表示已接收
+                confirmation_keywords = ['已接收', '接收', '收到', 'received', '了解', '明白']
+                is_confirmed = any(kw in response.lower() for kw in confirmation_keywords)
+
+                if is_confirmed:
+                    logger.info(f"第 {part_num} 块已确认接收")
+                else:
+                    logger.warning(f"第 {part_num} 块响应: {response[:100]}...")
+
+                # 短暂等待，避免发送过快
+                await asyncio.sleep(1)
     
     async def chat(
         self,
@@ -451,13 +688,27 @@ class AIClient:
                     "请在Edge浏览器中完成登录。"
                 )
 
-            # 选择模型（如果指定了模型名称）
-            target_model = self._map_model_name(model)
-            if target_model:
-                await self._select_model(page, target_model)
-            
+            # 选择模型（暂时屏蔽，选择器需要调试）
+            # target_model = self._map_model_name(model)
+            # if target_model:
+            #     await self._select_model(page, target_model)
+
             prompt = self._format_messages(messages)
-            
+
+            # 检查是否需要分割长文本
+            if len(prompt) > self.settings.max_input_chars:
+                logger.info(f"检测到长文本 ({len(prompt)} 字符)，启用分割模式")
+
+                # 提取问题和背景资料
+                content, question = self._extract_question_and_content(prompt)
+
+                # 分割文本
+                chunks = self._split_long_text(content, question)
+
+                # 分批发送
+                return await self._send_chunked_messages(page, chunks, stream=stream)
+
+            # 正常发送（文本长度在限制内）
             if stream:
                 # 记录当前响应元素数量（用于检测新响应）
                 responses = page.locator(self.settings.selector_response)

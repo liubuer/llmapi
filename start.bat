@@ -11,6 +11,7 @@ echo.
 if "%1"=="" goto help
 if "%1"=="edge" goto start_edge
 if "%1"=="api" goto start_api
+if "%1"=="all" goto start_all
 if "%1"=="status" goto check_status
 if "%1"=="install" goto install
 goto help
@@ -36,6 +37,12 @@ echo 启动API服务...
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 goto end
 
+:start_all
+echo 一体化启动（Edge + API）...
+echo.
+python -m app.edge_manager all
+goto end
+
 :check_status
 echo 检查状态...
 python -m app.edge_manager status
@@ -46,14 +53,18 @@ echo 用法: start.bat [命令]
 echo.
 echo 命令:
 echo   install   安装依赖
-echo   edge      启动Edge浏览器（第一步）
-echo   api       启动API服务（第二步）
+echo   all       一体化启动（推荐，只需一个终端）
+echo   edge      启动Edge浏览器（分步启动-第一步）
+echo   api       启动API服务（分步启动-第二步）
 echo   status    检查Edge连接状态
 echo.
-echo 使用步骤:
-echo   1. start.bat install    (首次)
-echo   2. start.bat edge       (启动Edge并登录)
-echo   3. start.bat api        (新终端，启动API)
+echo 推荐使用方式:
+echo   1. start.bat install    (首次安装)
+echo   2. start.bat all        (启动服务，按提示登录后按Enter)
+echo.
+echo 分步启动方式（需要两个终端）:
+echo   1. start.bat edge       (启动Edge并登录)
+echo   2. start.bat api        (新终端，启动API)
 echo.
 
 :end

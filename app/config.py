@@ -52,7 +52,11 @@ class Settings(BaseSettings):
 
     # 默认模型
     default_model: str = Field(default="GPT-5")
-    
+
+    # 大文本分割配置
+    chunk_size: int = Field(default=45000)  # 每块大小（留5000字符余量给提示词）
+    chunk_overlap: int = Field(default=200)  # 重叠字符数，确保上下文连贯
+
     class Config:
         env_file = ".env"
         extra = "ignore"

@@ -345,15 +345,15 @@ async def cmd_start_edge():
 async def cmd_check_status():
     """检查Edge连接状态"""
     manager = EdgeManager()
-    
+
     print("检查Edge连接状态...")
-    
+
     connected = await manager.connect_to_edge(max_retries=3)
-    
+
     if connected:
         print("✓ Edge已连接")
         print(f"  会话数: {manager.session_count}")
-        
+
         # 尝试访问页面
         try:
             async with manager.acquire_session() as session:
@@ -363,12 +363,98 @@ async def cmd_check_status():
                 print(f"  页面标题: {title}")
         except Exception as e:
             print(f"  获取页面信息失败: {e}")
-        
+
         await manager.disconnect()
     else:
         print("✗ Edge未连接")
         print()
         print("请先运行: python -m app.edge_manager start")
+
+
+async def cmd_start_all():
+    """一体化启动：Edge + API服务"""
+    import uvicorn
+    from threading import Thread
+
+    manager = EdgeManager()
+    settings = get_settings()
+
+    print("\n" + "=" * 60)
+    print("    内部AI工具API - 一体化启动")
+    print("=" * 60)
+    print()
+    print(f"即将启动Edge浏览器（调试端口: {settings.edge_debug_port}）")
+    print()
+
+    # 启动Edge
+    process = manager.start_edge_with_debug()
+
+    # 等待Edge启动
+    await asyncio.sleep(3)
+
+    # 尝试连接
+    connected = await manager.connect_to_edge()
+
+    if not connected:
+        print("✗ 无法连接到Edge")
+        process.terminate()
+        return
+
+    # 打开AI工具页面
+    async with manager.acquire_session() as session:
+        await session.page.goto(settings.ai_tool_url)
+
+    print()
+    print("✓ Edge已启动！")
+    print(f"✓ 已打开: {settings.ai_tool_url}")
+    print()
+    print("=" * 60)
+    print("  请在Edge中完成登录")
+    print("  登录完成后，按 Enter 键启动API服务...")
+    print("=" * 60)
+    print()
+
+    # 等待用户按Enter
+    try:
+        input(">>> 按 Enter 键继续...")
+    except EOFError:
+        pass
+
+    # 检查Edge是否还在运行
+    if process.poll() is not None:
+        print("\n✗ Edge已关闭，无法启动API服务")
+        return
+
+    # 断开当前连接（API服务会重新连接）
+    await manager.disconnect()
+
+    print()
+    print("=" * 60)
+    print("  正在启动API服务...")
+    print(f"  API地址: http://{settings.api_host}:{settings.api_port}")
+    print("  按 Ctrl+C 停止服务")
+    print("=" * 60)
+    print()
+
+    # 启动API服务（阻塞）
+    try:
+        uvicorn.run(
+            "app.main:app",
+            host=settings.api_host,
+            port=settings.api_port,
+            log_level="info"
+        )
+    except KeyboardInterrupt:
+        print("\n正在关闭...")
+    finally:
+        # 关闭Edge进程
+        if process.poll() is None:
+            print("关闭Edge浏览器...")
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except:
+                process.kill()
 
 
 if __name__ == "__main__":
@@ -379,14 +465,17 @@ if __name__ == "__main__":
 命令:
   start    启动Edge浏览器（带调试端口）
   status   检查Edge连接状态
+  all      一体化启动（Edge + API服务）
 """)
         sys.exit(0)
-    
+
     cmd = sys.argv[1]
-    
+
     if cmd == "start":
         asyncio.run(cmd_start_edge())
     elif cmd == "status":
         asyncio.run(cmd_check_status())
+    elif cmd == "all":
+        asyncio.run(cmd_start_all())
     else:
         print(f"未知命令: {cmd}")
