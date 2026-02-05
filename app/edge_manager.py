@@ -374,8 +374,8 @@ async def cmd_check_status():
 def cmd_start_all_sync():
     """一体化启动：Edge + API服务（同步版本）"""
     import uvicorn
+    import time
 
-    manager = EdgeManager()
     settings = get_settings()
 
     print("\n" + "=" * 60)
@@ -385,30 +385,37 @@ def cmd_start_all_sync():
     print(f"即将启动Edge浏览器（调试端口: {settings.edge_debug_port}）")
     print()
 
-    # 启动Edge
+    # 启动Edge（不使用单例，避免跨事件循环问题）
+    manager = EdgeManager()
     process = manager.start_edge_with_debug()
 
-    # 使用辅助异步函数完成初始化
-    async def init_edge():
-        await asyncio.sleep(3)
-        connected = await manager.connect_to_edge()
-        if not connected:
-            return False
-        async with manager.acquire_session() as session:
-            await session.page.goto(settings.ai_tool_url)
-        return True
+    # 等待Edge启动
+    print("等待Edge启动...")
+    time.sleep(3)
 
-    # 运行初始化
-    connected = asyncio.run(init_edge())
+    # 检查Edge进程是否运行
+    if process.poll() is not None:
+        print("✗ Edge启动失败")
+        return
 
-    if not connected:
-        print("✗ 无法连接到Edge")
+    # 使用简单的HTTP请求检查CDP端口是否可用
+    import urllib.request
+    cdp_url = f"http://127.0.0.1:{settings.edge_debug_port}/json/version"
+    for i in range(10):
+        try:
+            urllib.request.urlopen(cdp_url, timeout=2)
+            print("✓ Edge CDP端口已就绪")
+            break
+        except:
+            time.sleep(1)
+    else:
+        print("✗ 无法连接到Edge CDP端口")
         process.terminate()
         return
 
     print()
     print("✓ Edge已启动！")
-    print(f"✓ 已打开: {settings.ai_tool_url}")
+    print(f"  请在Edge中访问: {settings.ai_tool_url}")
     print()
     print("=" * 60)
     print("  请在Edge中完成登录")
@@ -427,8 +434,8 @@ def cmd_start_all_sync():
         print("\n✗ Edge已关闭，无法启动API服务")
         return
 
-    # 断开当前连接（API服务会重新连接）
-    asyncio.run(manager.disconnect())
+    # 重置单例状态，让API服务重新初始化
+    EdgeManager._instance = None
 
     print()
     print("=" * 60)
