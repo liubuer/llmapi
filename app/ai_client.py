@@ -89,6 +89,9 @@ class AIClient:
         last_content = ""
         stable_count = 0
         
+        # 加载中的提示文字（需要过滤）
+        loading_texts = ["が回答を生成中", "生成中", "Loading", "Thinking", "..."]
+        
         while (datetime.now() - start).total_seconds() < self.settings.response_timeout:
             try:
                 # 检查加载状态
@@ -106,11 +109,18 @@ class AIClient:
                 
                 if count > 0:
                     content = await responses.nth(count - 1).inner_text()
+                    content = content.strip()
+                    
+                    # 过滤加载提示
+                    is_loading_text = any(t in content for t in loading_texts)
+                    if is_loading_text or len(content) < 5:
+                        await asyncio.sleep(0.5)
+                        continue
                     
                     if content == last_content and not is_loading:
                         stable_count += 1
                         if stable_count >= 3:
-                            return content.strip()
+                            return content
                     else:
                         stable_count = 0
                         last_content = content
@@ -120,7 +130,7 @@ class AIClient:
                 await asyncio.sleep(0.5)
         
         if last_content:
-            return last_content.strip()
+            return last_content
         
         raise AIClientError("响应超时")
     
@@ -166,7 +176,12 @@ class AIClient:
         start = datetime.now()
         last_content = ""
         stable_count = 0
+        response_started = False
         
+        # 加载中的提示文字（需要过滤）
+        loading_texts = ["が回答を生成中", "生成中", "Loading", "Thinking", "..."]
+        
+        # 先等待响应开始（过滤加载提示）
         while (datetime.now() - start).total_seconds() < self.settings.response_timeout:
             try:
                 responses = page.locator(self.settings.selector_response)
@@ -174,6 +189,20 @@ class AIClient:
                 
                 if count > 0:
                     content = await responses.nth(count - 1).inner_text()
+                    content = content.strip()
+                    
+                    # 检查是否是加载提示
+                    is_loading_text = any(t in content for t in loading_texts)
+                    
+                    if is_loading_text or len(content) < 5:
+                        # 还在加载中，继续等待
+                        await asyncio.sleep(0.3)
+                        continue
+                    
+                    # 真正的响应开始了
+                    if not response_started:
+                        response_started = True
+                        last_content = ""  # 重置
                     
                     if len(content) > len(last_content):
                         delta = content[len(last_content):]
@@ -181,6 +210,7 @@ class AIClient:
                         stable_count = 0
                         yield delta
                     else:
+                        # 检查是否还在加载
                         loading = page.locator(self.settings.selector_loading)
                         is_loading = await loading.count() > 0
                         if not is_loading:
