@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     selector_new_chat: str = Field(
         default="button:has-text('新对话'), button:has-text('New'), a[href*='new']"
     )
+
+    # 模型选择器
+    selector_model_button: str = Field(
+        default="button.mantine-Button-root[aria-haspopup='menu']"
+    )
+    selector_model_dropdown: str = Field(
+        default="div[role='menu'], div[class*='mantine-Menu-dropdown']"
+    )
+
+    # 默认模型
+    default_model: str = Field(default="GPT-5")
     
     class Config:
         env_file = ".env"

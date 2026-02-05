@@ -35,11 +35,63 @@ class AIClient:
         """导航到AI工具页面"""
         current_url = page.url
         target_url = self.settings.ai_tool_url
-        
+
         if not current_url.startswith(target_url):
             logger.info(f"导航到: {target_url}")
             await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(2)
+
+    async def _select_model(self, page: Page, model: str):
+        """选择LLM模型"""
+        try:
+            # 查找模型选择按钮
+            model_button = page.locator(self.settings.selector_model_button).first
+
+            if not await model_button.is_visible(timeout=3000):
+                logger.warning("未找到模型选择按钮")
+                return False
+
+            # 检查当前选中的模型
+            button_text = await model_button.inner_text()
+            if model in button_text:
+                logger.info(f"当前已选择模型: {model}")
+                return True
+
+            logger.info(f"当前模型: {button_text.strip()}, 切换到: {model}")
+
+            # 点击按钮打开下拉菜单
+            await model_button.click()
+            await asyncio.sleep(0.5)
+
+            # 等待下拉菜单出现
+            dropdown = page.locator(self.settings.selector_model_dropdown)
+            await dropdown.wait_for(state="visible", timeout=3000)
+
+            # 在下拉菜单中查找目标模型选项
+            # 尝试多种选择器
+            model_option = page.locator(f"text='{model}'").first
+            if not await model_option.is_visible(timeout=1000):
+                # 尝试包含模型名的按钮或菜单项
+                model_option = page.locator(f"button:has-text('{model}'), [role='menuitem']:has-text('{model}'), div:has-text('{model}')").first
+
+            if await model_option.is_visible(timeout=2000):
+                await model_option.click()
+                logger.info(f"已选择模型: {model}")
+                await asyncio.sleep(0.5)
+                return True
+            else:
+                logger.warning(f"未找到模型选项: {model}")
+                # 点击空白处关闭下拉菜单
+                await page.keyboard.press("Escape")
+                return False
+
+        except Exception as e:
+            logger.warning(f"选择模型失败: {e}")
+            try:
+                await page.keyboard.press("Escape")
+            except:
+                pass
+            return False
     
     async def _find_input(self, page: Page):
         """查找输入框"""
@@ -323,6 +375,28 @@ class AIClient:
             logger.warning("流式响应超时，未检测到响应内容")
             await self._save_screenshot(page, "stream_timeout")
     
+    def _map_model_name(self, model: str) -> str:
+        """将API模型名称映射到网页上的模型名称"""
+        model_lower = model.lower()
+
+        # 模型名称映射
+        model_mapping = {
+            "gpt-5": "GPT-5",
+            "gpt5": "GPT-5",
+            "gpt-5-thinking": "GPT-5 thinking",
+            "gpt5-thinking": "GPT-5 thinking",
+            "gpt-4.1-mini": "GPT-4.1 mini",
+            "gpt-4.1": "GPT-4.1 mini",
+            "gpt4.1-mini": "GPT-4.1 mini",
+        }
+
+        # 查找映射
+        if model_lower in model_mapping:
+            return model_mapping[model_lower]
+
+        # 如果没有映射，使用默认模型
+        return self.settings.default_model
+
     def _format_messages(self, messages: List[ChatMessage]) -> str:
         """格式化消息"""
         if len(messages) == 1 and messages[0].role == "user":
@@ -347,7 +421,7 @@ class AIClient:
     ):
         """发送聊天请求"""
         manager = await get_edge_manager()
-        
+
         if not manager.is_connected:
             connected = await manager.connect_to_edge()
             if not connected:
@@ -355,12 +429,12 @@ class AIClient:
                     "无法连接到Edge浏览器。\n"
                     "请先运行: python -m app.edge_manager start"
                 )
-        
+
         async with manager.acquire_session() as session:
             page = session.page
-            
+
             await self._navigate_to_ai_tool(page)
-            
+
             # 检查是否有输入框（验证登录状态）
             input_box = await self._find_input(page)
             if not input_box:
@@ -369,6 +443,11 @@ class AIClient:
                     "未找到输入框，可能未登录。\n"
                     "请在Edge浏览器中完成登录。"
                 )
+
+            # 选择模型（如果指定了模型名称）
+            target_model = self._map_model_name(model)
+            if target_model:
+                await self._select_model(page, target_model)
             
             prompt = self._format_messages(messages)
             
