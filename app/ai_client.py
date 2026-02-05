@@ -94,6 +94,19 @@ class AIClient:
 
         logger.debug(f"等待响应，选择器: {self.settings.selector_response}, 初始元素数: {initial_count}")
 
+        # 记录初始内容（用于检测内容变化，即使元素数量不变）
+        initial_content = ""
+        if initial_count > 0:
+            try:
+                responses_init = page.locator(self.settings.selector_response)
+                initial_content = await responses_init.nth(initial_count - 1).inner_text()
+                initial_content = initial_content.strip()
+                logger.debug(f"初始内容: {initial_content[:50]}...")
+            except:
+                pass
+
+        wait_new_element_timeout = 5  # 等待新元素的超时时间（秒）
+
         while (datetime.now() - start).total_seconds() < self.settings.response_timeout:
             try:
                 # 检查加载状态
@@ -108,14 +121,25 @@ class AIClient:
                 # 获取响应
                 responses = page.locator(self.settings.selector_response)
                 count = await responses.count()
+                elapsed = (datetime.now() - start).total_seconds()
 
-                logger.debug(f"找到 {count} 个响应元素 (初始: {initial_count})，is_loading={is_loading}")
+                logger.debug(f"找到 {count} 个响应元素 (初始: {initial_count})，is_loading={is_loading}, elapsed={elapsed:.1f}s")
 
-                # 等待新元素出现
-                if count <= initial_count:
-                    logger.debug("等待新响应元素出现...")
-                    await asyncio.sleep(0.5)
-                    continue
+                # 等待新元素出现，但如果超时则检查内容变化
+                if count <= initial_count and count > 0:
+                    if elapsed < wait_new_element_timeout:
+                        logger.debug("等待新响应元素出现...")
+                        await asyncio.sleep(0.5)
+                        continue
+                    else:
+                        # 超时后检查最后一个元素的内容是否变化
+                        current_content = await responses.nth(count - 1).inner_text()
+                        current_content = current_content.strip()
+                        if current_content == initial_content or current_content == sent_message.strip():
+                            logger.debug("内容未变化，继续等待...")
+                            await asyncio.sleep(0.5)
+                            continue
+                        logger.debug("检测到内容变化，继续处理")
 
                 if count > 0:
                     content = await responses.nth(count - 1).inner_text()
@@ -211,19 +235,43 @@ class AIClient:
 
         logger.debug(f"开始流式响应，选择器: {self.settings.selector_response}, 初始元素数: {initial_count}")
 
+        # 记录初始内容（用于检测内容变化，即使元素数量不变）
+        initial_content = ""
+        if initial_count > 0:
+            try:
+                responses_init = page.locator(self.settings.selector_response)
+                initial_content = await responses_init.nth(initial_count - 1).inner_text()
+                initial_content = initial_content.strip()
+                logger.debug(f"流式: 初始内容: {initial_content[:50]}...")
+            except:
+                pass
+
+        wait_new_element_timeout = 5  # 等待新元素的超时时间（秒）
+
         # 先等待新响应元素出现
         while (datetime.now() - start).total_seconds() < self.settings.response_timeout:
             try:
                 responses = page.locator(self.settings.selector_response)
                 count = await responses.count()
+                elapsed = (datetime.now() - start).total_seconds()
 
-                logger.debug(f"流式: 找到 {count} 个响应元素 (初始: {initial_count})")
+                logger.debug(f"流式: 找到 {count} 个响应元素 (初始: {initial_count}), elapsed={elapsed:.1f}s")
 
-                # 等待新元素出现
-                if count <= initial_count:
-                    logger.debug("流式: 等待新响应元素出现...")
-                    await asyncio.sleep(0.3)
-                    continue
+                # 等待新元素出现，但如果超时则检查内容变化
+                if count <= initial_count and count > 0:
+                    if elapsed < wait_new_element_timeout:
+                        logger.debug("流式: 等待新响应元素出现...")
+                        await asyncio.sleep(0.3)
+                        continue
+                    else:
+                        # 超时后检查最后一个元素的内容是否变化
+                        current_content = await responses.nth(count - 1).inner_text()
+                        current_content = current_content.strip()
+                        if current_content == initial_content or current_content == sent_message.strip():
+                            logger.debug("流式: 内容未变化，继续等待...")
+                            await asyncio.sleep(0.3)
+                            continue
+                        logger.debug("流式: 检测到内容变化，继续处理")
 
                 if count > 0:
                     content = await responses.nth(count - 1).inner_text()
