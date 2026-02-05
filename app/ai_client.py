@@ -156,14 +156,9 @@ class AIClient:
         await asyncio.sleep(0.3)
         logger.info(f"已输入消息 ({len(message)} 字符)")
         
-        # 发送
-        send_btn = await self._find_send_button(page)
-        if send_btn:
-            await send_btn.click()
-        else:
-            await input_box.press("Enter")
-        
-        logger.info("消息已发送，等待响应...")
+        # 发送 - 使用 Ctrl+Enter
+        await input_box.press("Control+Enter")
+        logger.info("消息已发送 (Ctrl+Enter)，等待响应...")
         return await self._wait_for_response(page)
     
     async def _stream_response(self, page: Page) -> AsyncGenerator[str, None]:
@@ -263,11 +258,9 @@ class AIClient:
                     await input_box.fill(prompt)
                 
                 await asyncio.sleep(0.3)
-                send_btn = await self._find_send_button(page)
-                if send_btn:
-                    await send_btn.click()
-                else:
-                    await input_box.press("Enter")
+                
+                # 发送 - 使用 Ctrl+Enter
+                await input_box.press("Control+Enter")
                 
                 return self._stream_response(page)
             else:
