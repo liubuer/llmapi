@@ -83,7 +83,7 @@ class AIClient:
                 continue
         return None
     
-    async def _wait_for_response(self, page: Page, sent_message: str = "") -> str:
+    async def _wait_for_response(self, page: Page, sent_message: str = "", initial_count: int = 0) -> str:
         """等待响应"""
         start = datetime.now()
         last_content = ""
@@ -92,7 +92,7 @@ class AIClient:
         # 加载中的提示文字（需要过滤）
         loading_texts = ["が回答を生成中", "生成中", "Loading", "Thinking", "..."]
 
-        logger.debug(f"等待响应，选择器: {self.settings.selector_response}")
+        logger.debug(f"等待响应，选择器: {self.settings.selector_response}, 初始元素数: {initial_count}")
 
         while (datetime.now() - start).total_seconds() < self.settings.response_timeout:
             try:
@@ -109,7 +109,13 @@ class AIClient:
                 responses = page.locator(self.settings.selector_response)
                 count = await responses.count()
 
-                logger.debug(f"找到 {count} 个响应元素，is_loading={is_loading}")
+                logger.debug(f"找到 {count} 个响应元素 (初始: {initial_count})，is_loading={is_loading}")
+
+                # 等待新元素出现
+                if count <= initial_count:
+                    logger.debug("等待新响应元素出现...")
+                    await asyncio.sleep(0.5)
+                    continue
 
                 if count > 0:
                     content = await responses.nth(count - 1).inner_text()
@@ -155,21 +161,26 @@ class AIClient:
         """发送消息"""
         if len(message) > self.settings.max_input_chars:
             raise AIClientError(f"消息过长: {len(message)} > {self.settings.max_input_chars}")
-        
+
         # 查找输入框
         input_box = await self._find_input(page)
         if not input_box:
             await self._save_screenshot(page, "no_input")
             raise AIClientError("找不到输入框")
-        
+
+        # 记录当前响应元素数量（用于检测新响应）
+        responses = page.locator(self.settings.selector_response)
+        initial_count = await responses.count()
+        logger.debug(f"非流式模式: 当前响应元素数量 = {initial_count}")
+
         # 输入消息
         await input_box.click()
         await asyncio.sleep(0.2)
-        
+
         if len(message) > 500:
             # 长文本用JS输入
             await page.evaluate("""(text) => {
-                const el = document.querySelector('textarea') || 
+                const el = document.querySelector('textarea') ||
                            document.querySelector('[contenteditable="true"]');
                 if (el) {
                     if (el.tagName === 'TEXTAREA') el.value = text;
@@ -179,16 +190,16 @@ class AIClient:
             }""", message)
         else:
             await input_box.fill(message)
-        
+
         await asyncio.sleep(0.3)
         logger.info(f"已输入消息 ({len(message)} 字符)")
-        
+
         # 发送 - 使用 Ctrl+Enter
         await input_box.press("Control+Enter")
         logger.info("消息已发送 (Ctrl+Enter)，等待响应...")
-        return await self._wait_for_response(page, sent_message=message)
+        return await self._wait_for_response(page, sent_message=message, initial_count=initial_count)
     
-    async def _stream_response(self, page: Page, sent_message: str = "") -> AsyncGenerator[str, None]:
+    async def _stream_response(self, page: Page, sent_message: str = "", initial_count: int = 0) -> AsyncGenerator[str, None]:
         """流式响应"""
         start = datetime.now()
         last_content = ""
@@ -198,15 +209,21 @@ class AIClient:
         # 加载中的提示文字（需要过滤）
         loading_texts = ["が回答を生成中", "生成中", "Loading", "Thinking", "..."]
 
-        logger.debug(f"开始流式响应，选择器: {self.settings.selector_response}")
+        logger.debug(f"开始流式响应，选择器: {self.settings.selector_response}, 初始元素数: {initial_count}")
 
-        # 先等待响应开始（过滤加载提示）
+        # 先等待新响应元素出现
         while (datetime.now() - start).total_seconds() < self.settings.response_timeout:
             try:
                 responses = page.locator(self.settings.selector_response)
                 count = await responses.count()
 
-                logger.debug(f"流式: 找到 {count} 个响应元素")
+                logger.debug(f"流式: 找到 {count} 个响应元素 (初始: {initial_count})")
+
+                # 等待新元素出现
+                if count <= initial_count:
+                    logger.debug("流式: 等待新响应元素出现...")
+                    await asyncio.sleep(0.3)
+                    continue
 
                 if count > 0:
                     content = await responses.nth(count - 1).inner_text()
@@ -308,6 +325,11 @@ class AIClient:
             prompt = self._format_messages(messages)
             
             if stream:
+                # 记录当前响应元素数量（用于检测新响应）
+                responses = page.locator(self.settings.selector_response)
+                initial_count = await responses.count()
+                logger.debug(f"流式模式: 当前响应元素数量 = {initial_count}")
+
                 # 输入并发送
                 await input_box.click()
                 if len(prompt) > 500:
@@ -329,7 +351,7 @@ class AIClient:
                 # 发送 - 使用 Ctrl+Enter
                 await input_box.press("Control+Enter")
 
-                return self._stream_response(page, sent_message=prompt)
+                return self._stream_response(page, sent_message=prompt, initial_count=initial_count)
             else:
                 return await self._send_message(page, prompt)
 
