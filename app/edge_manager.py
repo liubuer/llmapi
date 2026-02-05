@@ -371,10 +371,9 @@ async def cmd_check_status():
         print("请先运行: python -m app.edge_manager start")
 
 
-async def cmd_start_all():
-    """一体化启动：Edge + API服务"""
+def cmd_start_all_sync():
+    """一体化启动：Edge + API服务（同步版本）"""
     import uvicorn
-    from threading import Thread
 
     manager = EdgeManager()
     settings = get_settings()
@@ -389,20 +388,23 @@ async def cmd_start_all():
     # 启动Edge
     process = manager.start_edge_with_debug()
 
-    # 等待Edge启动
-    await asyncio.sleep(3)
+    # 使用辅助异步函数完成初始化
+    async def init_edge():
+        await asyncio.sleep(3)
+        connected = await manager.connect_to_edge()
+        if not connected:
+            return False
+        async with manager.acquire_session() as session:
+            await session.page.goto(settings.ai_tool_url)
+        return True
 
-    # 尝试连接
-    connected = await manager.connect_to_edge()
+    # 运行初始化
+    connected = asyncio.run(init_edge())
 
     if not connected:
         print("✗ 无法连接到Edge")
         process.terminate()
         return
-
-    # 打开AI工具页面
-    async with manager.acquire_session() as session:
-        await session.page.goto(settings.ai_tool_url)
 
     print()
     print("✓ Edge已启动！")
@@ -426,7 +428,7 @@ async def cmd_start_all():
         return
 
     # 断开当前连接（API服务会重新连接）
-    await manager.disconnect()
+    asyncio.run(manager.disconnect())
 
     print()
     print("=" * 60)
@@ -476,6 +478,6 @@ if __name__ == "__main__":
     elif cmd == "status":
         asyncio.run(cmd_check_status())
     elif cmd == "all":
-        asyncio.run(cmd_start_all())
+        cmd_start_all_sync()
     else:
         print(f"未知命令: {cmd}")
