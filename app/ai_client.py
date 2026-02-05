@@ -83,15 +83,17 @@ class AIClient:
                 continue
         return None
     
-    async def _wait_for_response(self, page: Page) -> str:
+    async def _wait_for_response(self, page: Page, sent_message: str = "") -> str:
         """等待响应"""
         start = datetime.now()
         last_content = ""
         stable_count = 0
-        
+
         # 加载中的提示文字（需要过滤）
         loading_texts = ["が回答を生成中", "生成中", "Loading", "Thinking", "..."]
-        
+
+        logger.debug(f"等待响应，选择器: {self.settings.selector_response}")
+
         while (datetime.now() - start).total_seconds() < self.settings.response_timeout:
             try:
                 # 检查加载状态
@@ -102,36 +104,51 @@ class AIClient:
                         is_loading = await loading.first.is_visible(timeout=500)
                     except:
                         is_loading = False
-                
+
                 # 获取响应
                 responses = page.locator(self.settings.selector_response)
                 count = await responses.count()
-                
+
+                logger.debug(f"找到 {count} 个响应元素，is_loading={is_loading}")
+
                 if count > 0:
                     content = await responses.nth(count - 1).inner_text()
                     content = content.strip()
-                    
+
+                    logger.debug(f"最后一个元素内容 ({len(content)} 字符): {content[:100]}...")
+
                     # 过滤加载提示
                     is_loading_text = any(t in content for t in loading_texts)
+
+                    # 过滤用户发送的消息（避免把用户消息当作响应）
+                    if sent_message and content == sent_message.strip():
+                        logger.debug("检测到用户消息，跳过")
+                        await asyncio.sleep(0.5)
+                        continue
+
                     if is_loading_text or len(content) < 5:
                         await asyncio.sleep(0.5)
                         continue
-                    
+
                     if content == last_content and not is_loading:
                         stable_count += 1
                         if stable_count >= 3:
+                            logger.info(f"响应稳定，返回 {len(content)} 字符")
                             return content
                     else:
                         stable_count = 0
                         last_content = content
-                
+
                 await asyncio.sleep(0.5)
-            except:
+            except Exception as e:
+                logger.debug(f"等待响应时出错: {e}")
                 await asyncio.sleep(0.5)
-        
+
         if last_content:
+            logger.warning(f"响应超时，返回最后内容: {len(last_content)} 字符")
             return last_content
-        
+
+        await self._save_screenshot(page, "response_timeout")
         raise AIClientError("响应超时")
     
     async def _send_message(self, page: Page, message: str) -> str:
@@ -169,41 +186,54 @@ class AIClient:
         # 发送 - 使用 Ctrl+Enter
         await input_box.press("Control+Enter")
         logger.info("消息已发送 (Ctrl+Enter)，等待响应...")
-        return await self._wait_for_response(page)
+        return await self._wait_for_response(page, sent_message=message)
     
-    async def _stream_response(self, page: Page) -> AsyncGenerator[str, None]:
+    async def _stream_response(self, page: Page, sent_message: str = "") -> AsyncGenerator[str, None]:
         """流式响应"""
         start = datetime.now()
         last_content = ""
         stable_count = 0
         response_started = False
-        
+
         # 加载中的提示文字（需要过滤）
         loading_texts = ["が回答を生成中", "生成中", "Loading", "Thinking", "..."]
-        
+
+        logger.debug(f"开始流式响应，选择器: {self.settings.selector_response}")
+
         # 先等待响应开始（过滤加载提示）
         while (datetime.now() - start).total_seconds() < self.settings.response_timeout:
             try:
                 responses = page.locator(self.settings.selector_response)
                 count = await responses.count()
-                
+
+                logger.debug(f"流式: 找到 {count} 个响应元素")
+
                 if count > 0:
                     content = await responses.nth(count - 1).inner_text()
                     content = content.strip()
-                    
+
+                    logger.debug(f"流式: 内容 ({len(content)} 字符): {content[:50]}...")
+
                     # 检查是否是加载提示
                     is_loading_text = any(t in content for t in loading_texts)
-                    
+
+                    # 过滤用户发送的消息
+                    if sent_message and content == sent_message.strip():
+                        logger.debug("流式: 检测到用户消息，跳过")
+                        await asyncio.sleep(0.3)
+                        continue
+
                     if is_loading_text or len(content) < 5:
                         # 还在加载中，继续等待
                         await asyncio.sleep(0.3)
                         continue
-                    
+
                     # 真正的响应开始了
                     if not response_started:
                         response_started = True
                         last_content = ""  # 重置
-                    
+                        logger.info("流式响应开始")
+
                     if len(content) > len(last_content):
                         delta = content[len(last_content):]
                         last_content = content
@@ -216,11 +246,17 @@ class AIClient:
                         if not is_loading:
                             stable_count += 1
                             if stable_count >= 5:
+                                logger.info("流式响应结束")
                                 break
-                
+
                 await asyncio.sleep(0.2)
-            except:
+            except Exception as e:
+                logger.debug(f"流式响应出错: {e}")
                 await asyncio.sleep(0.2)
+
+        if not response_started:
+            logger.warning("流式响应超时，未检测到响应内容")
+            await self._save_screenshot(page, "stream_timeout")
     
     def _format_messages(self, messages: List[ChatMessage]) -> str:
         """格式化消息"""
@@ -276,7 +312,7 @@ class AIClient:
                 await input_box.click()
                 if len(prompt) > 500:
                     await page.evaluate("""(text) => {
-                        const el = document.querySelector('textarea') || 
+                        const el = document.querySelector('textarea') ||
                                    document.querySelector('[contenteditable="true"]');
                         if (el) {
                             if (el.tagName === 'TEXTAREA') el.value = text;
@@ -286,13 +322,14 @@ class AIClient:
                     }""", prompt)
                 else:
                     await input_box.fill(prompt)
-                
+
                 await asyncio.sleep(0.3)
-                
+                logger.info(f"发送消息 ({len(prompt)} 字符): {prompt[:50]}...")
+
                 # 发送 - 使用 Ctrl+Enter
                 await input_box.press("Control+Enter")
-                
-                return self._stream_response(page)
+
+                return self._stream_response(page, sent_message=prompt)
             else:
                 return await self._send_message(page, prompt)
 

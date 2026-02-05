@@ -109,3 +109,70 @@ async def list_models():
         ModelInfo(id="gpt-5"),
         ModelInfo(id="gpt-4o"),
     ])
+
+
+@router.get("/debug/selectors")
+async def debug_selectors():
+    """调试端点：检查页面上的选择器匹配情况"""
+    from ..edge_manager import edge_manager
+    from ..config import get_settings
+
+    settings = get_settings()
+
+    if not edge_manager.is_connected:
+        return {"error": "Edge未连接", "connected": False}
+
+    try:
+        async with edge_manager.acquire_session() as session:
+            page = session.page
+
+            # 获取当前页面信息
+            url = page.url
+            title = await page.title()
+
+            # 检查各个选择器
+            results = {
+                "url": url,
+                "title": title,
+                "selectors": {}
+            }
+
+            # 检查输入框
+            input_selectors = settings.selector_input.split(",")
+            for sel in input_selectors:
+                sel = sel.strip()
+                try:
+                    count = await page.locator(sel).count()
+                    results["selectors"][f"input: {sel}"] = count
+                except Exception as e:
+                    results["selectors"][f"input: {sel}"] = f"错误: {e}"
+
+            # 检查响应选择器
+            response_selectors = settings.selector_response.split(",")
+            for sel in response_selectors:
+                sel = sel.strip()
+                try:
+                    locator = page.locator(sel)
+                    count = await locator.count()
+                    texts = []
+                    for i in range(min(count, 3)):  # 最多显示3个
+                        try:
+                            text = await locator.nth(i).inner_text()
+                            texts.append(text[:100] + "..." if len(text) > 100 else text)
+                        except:
+                            pass
+                    results["selectors"][f"response: {sel}"] = {"count": count, "samples": texts}
+                except Exception as e:
+                    results["selectors"][f"response: {sel}"] = f"错误: {e}"
+
+            # 检查加载选择器
+            try:
+                count = await page.locator(settings.selector_loading).count()
+                results["selectors"]["loading"] = count
+            except Exception as e:
+                results["selectors"]["loading"] = f"错误: {e}"
+
+            return results
+
+    except Exception as e:
+        return {"error": str(e)}
