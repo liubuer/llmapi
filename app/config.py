@@ -44,10 +44,10 @@ class Settings(BaseSettings):
 
     # 模型选择器
     selector_model_button: str = Field(
-        default="button.mantine-Button-root[aria-haspopup='menu']"
+        default="button[id^='mantine-'][id$='-target'][aria-haspopup='menu']"
     )
-    selector_model_dropdown: str = Field(
-        default="div[role='menu'], div[class*='mantine-Menu-dropdown']"
+    selector_model_item: str = Field(
+        default="div.mantine-Menu-itemLabel"
     )
 
     # 默认模型

@@ -44,7 +44,7 @@ class AIClient:
     async def _select_model(self, page: Page, model: str):
         """选择LLM模型"""
         try:
-            # 查找模型选择按钮
+            # 查找模型选择按钮 (id 匹配 mantine-*-target)
             model_button = page.locator(self.settings.selector_model_button).first
 
             if not await model_button.is_visible(timeout=3000):
@@ -59,31 +59,38 @@ class AIClient:
 
             logger.info(f"当前模型: {button_text.strip()}, 切换到: {model}")
 
+            # 获取下拉菜单ID (从 aria-controls 属性)
+            dropdown_id = await model_button.get_attribute("aria-controls")
+            logger.debug(f"下拉菜单ID: {dropdown_id}")
+
             # 点击按钮打开下拉菜单
             await model_button.click()
             await asyncio.sleep(0.5)
 
             # 等待下拉菜单出现
-            dropdown = page.locator(self.settings.selector_model_dropdown)
-            await dropdown.wait_for(state="visible", timeout=3000)
+            if dropdown_id:
+                dropdown = page.locator(f"#{dropdown_id}")
+                await dropdown.wait_for(state="visible", timeout=3000)
 
-            # 在下拉菜单中查找目标模型选项
-            # 尝试多种选择器
-            model_option = page.locator(f"text='{model}'").first
-            if not await model_option.is_visible(timeout=1000):
-                # 尝试包含模型名的按钮或菜单项
-                model_option = page.locator(f"button:has-text('{model}'), [role='menuitem']:has-text('{model}'), div:has-text('{model}')").first
+            # 在下拉菜单中查找目标模型选项 (使用 mantine-Menu-itemLabel)
+            menu_items = page.locator(self.settings.selector_model_item)
+            count = await menu_items.count()
+            logger.debug(f"找到 {count} 个菜单项")
 
-            if await model_option.is_visible(timeout=2000):
-                await model_option.click()
-                logger.info(f"已选择模型: {model}")
-                await asyncio.sleep(0.5)
-                return True
-            else:
-                logger.warning(f"未找到模型选项: {model}")
-                # 点击空白处关闭下拉菜单
-                await page.keyboard.press("Escape")
-                return False
+            for i in range(count):
+                item = menu_items.nth(i)
+                item_text = await item.inner_text()
+                logger.debug(f"菜单项 {i}: {item_text}")
+
+                if model in item_text:
+                    await item.click()
+                    logger.info(f"已选择模型: {model}")
+                    await asyncio.sleep(0.5)
+                    return True
+
+            logger.warning(f"未找到模型选项: {model}")
+            await page.keyboard.press("Escape")
+            return False
 
         except Exception as e:
             logger.warning(f"选择模型失败: {e}")
