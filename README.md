@@ -11,9 +11,14 @@
 - [程序流程详解](#程序流程详解)
 - [快速开始](#快速开始)
 - [API使用](#api使用)
+  - [Python / cURL](#python-openai-sdk)
+  - [LangChain集成](#langchain-集成)
+    - [Agent示例](#示例1-agent-工具调用)
+    - [RAG示例](#示例2-rag-检索增强生成)
 - [配置说明](#配置说明)
 - [文件结构](#文件结构)
 - [故障排除](#故障排除)
+- [示例运行](#示例运行)
 
 ---
 
@@ -364,6 +369,552 @@ curl http://localhost:8000/v1/chat/completions \
 | `/v1/models` | GET | 可用模型列表 |
 | `/v1/debug/selectors` | GET | 调试端点，检查页面选择器 |
 
+### LangChain 集成
+
+由于本API兼容OpenAI格式，可以无缝集成LangChain生态。
+
+#### 基础使用
+
+```python
+from langchain_openai import ChatOpenAI
+
+# 创建LLM实例，指向本地API
+llm = ChatOpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="not-needed",
+    model="gpt-5"
+)
+
+# 简单调用
+response = llm.invoke("你好，请介绍一下你自己")
+print(response.content)
+```
+
+#### 示例1: Agent (工具调用)
+
+Agent可以根据用户输入自动选择和调用工具，实现复杂任务。
+
+```python
+"""
+LangChain Agent 示例
+- 定义多个工具（搜索、计算器、天气查询）
+- Agent根据用户问题自动选择合适的工具
+- 支持多轮对话和工具链式调用
+"""
+from langchain_openai import ChatOpenAI
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain.tools import Tool, tool
+from langchain import hub
+import requests
+
+# ========== 1. 创建LLM ==========
+llm = ChatOpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="not-needed",
+    model="gpt-5",
+    temperature=0
+)
+
+# ========== 2. 定义工具 ==========
+
+@tool
+def calculator(expression: str) -> str:
+    """计算数学表达式。输入应该是一个有效的数学表达式，如 '2 + 2' 或 '100 * 0.15'"""
+    try:
+        # 安全的数学计算
+        allowed_chars = set('0123456789+-*/.() ')
+        if not all(c in allowed_chars for c in expression):
+            return "错误：表达式包含非法字符"
+        result = eval(expression)
+        return f"计算结果: {expression} = {result}"
+    except Exception as e:
+        return f"计算错误: {e}"
+
+@tool
+def search_web(query: str) -> str:
+    """搜索网络获取信息。当需要查找最新信息、新闻、事实时使用此工具。"""
+    # 这里模拟搜索结果，实际应用中可接入搜索API
+    mock_results = {
+        "天气": "今天北京天气晴朗，温度15-22度，适合外出。",
+        "新闻": "今日热点：科技公司发布新产品，股市表现平稳。",
+        "default": f"搜索 '{query}' 的结果：找到相关信息若干条。"
+    }
+    for key, value in mock_results.items():
+        if key in query:
+            return value
+    return mock_results["default"]
+
+@tool
+def get_current_time() -> str:
+    """获取当前时间。当用户询问现在几点或当前时间时使用。"""
+    from datetime import datetime
+    now = datetime.now()
+    return f"当前时间: {now.strftime('%Y年%m月%d日 %H:%M:%S')}"
+
+@tool
+def file_reader(filepath: str) -> str:
+    """读取本地文件内容。输入文件路径，返回文件内容。"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+            if len(content) > 1000:
+                content = content[:1000] + "...(内容已截断)"
+            return content
+    except FileNotFoundError:
+        return f"文件不存在: {filepath}"
+    except Exception as e:
+        return f"读取文件错误: {e}"
+
+# 工具列表
+tools = [calculator, search_web, get_current_time, file_reader]
+
+# ========== 3. 创建Agent ==========
+
+# 使用ReAct提示模板（推理+行动）
+prompt = hub.pull("hwchase17/react")
+
+# 创建Agent
+agent = create_react_agent(llm, tools, prompt)
+
+# 创建执行器
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
+    verbose=True,      # 显示思考过程
+    max_iterations=5,  # 最大迭代次数
+    handle_parsing_errors=True
+)
+
+# ========== 4. 运行Agent ==========
+
+if __name__ == "__main__":
+    # 测试不同类型的问题
+    questions = [
+        "现在几点了？",
+        "帮我计算一下 125 * 0.8 + 50 等于多少",
+        "搜索一下今天的天气情况",
+        "我想知道现在的时间，然后帮我计算 24 - 当前小时数"
+    ]
+
+    for q in questions:
+        print(f"\n{'='*50}")
+        print(f"问题: {q}")
+        print('='*50)
+        result = agent_executor.invoke({"input": q})
+        print(f"\n答案: {result['output']}")
+```
+
+**Agent执行流程:**
+
+```
+用户问题: "帮我计算 125 * 0.8 + 50"
+      │
+      ▼
+Agent思考 (Thought)
+      │ "用户需要计算数学表达式，我应该使用calculator工具"
+      ▼
+选择工具 (Action): calculator
+      │
+      ▼
+执行工具 (Action Input): "125 * 0.8 + 50"
+      │
+      ▼
+获取结果 (Observation): "计算结果: 125 * 0.8 + 50 = 150.0"
+      │
+      ▼
+生成回答 (Final Answer): "125 * 0.8 + 50 的计算结果是 150"
+```
+
+#### 示例2: RAG (检索增强生成)
+
+RAG通过向量数据库存储文档，在回答问题时检索相关内容，提高回答准确性。
+
+```python
+"""
+LangChain RAG 示例
+- 使用Chroma向量数据库存储文档
+- 文档切分和向量化
+- 检索增强生成回答
+"""
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains import RetrievalQA
+from langchain_core.prompts import PromptTemplate
+from langchain_community.document_loaders import (
+    TextLoader,
+    DirectoryLoader,
+    PyPDFLoader
+)
+import os
+
+# ========== 1. 配置 ==========
+
+# LLM配置
+llm = ChatOpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="not-needed",
+    model="gpt-5",
+    temperature=0
+)
+
+# Embedding模型配置
+# 注意：本地API可能不支持embeddings，这里使用替代方案
+
+# 方案A: 使用HuggingFace本地Embedding（推荐，无需外部API）
+from langchain_community.embeddings import HuggingFaceEmbeddings
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    model_kwargs={'device': 'cpu'},
+    encode_kwargs={'normalize_embeddings': True}
+)
+
+# 方案B: 如果有OpenAI API Key，可以使用OpenAI Embedding
+# embeddings = OpenAIEmbeddings(
+#     api_key="your-openai-api-key",
+#     model="text-embedding-3-small"
+# )
+
+# 向量数据库存储路径
+CHROMA_PATH = "./chroma_db"
+
+# ========== 2. 文档加载与处理 ==========
+
+def load_documents(source_path: str):
+    """加载文档"""
+    documents = []
+
+    if os.path.isfile(source_path):
+        # 单个文件
+        if source_path.endswith('.pdf'):
+            loader = PyPDFLoader(source_path)
+        else:
+            loader = TextLoader(source_path, encoding='utf-8')
+        documents = loader.load()
+    elif os.path.isdir(source_path):
+        # 目录下所有文件
+        # 加载txt文件
+        txt_loader = DirectoryLoader(
+            source_path,
+            glob="**/*.txt",
+            loader_cls=TextLoader,
+            loader_kwargs={'encoding': 'utf-8'}
+        )
+        documents.extend(txt_loader.load())
+
+        # 加载pdf文件
+        pdf_loader = DirectoryLoader(
+            source_path,
+            glob="**/*.pdf",
+            loader_cls=PyPDFLoader
+        )
+        documents.extend(pdf_loader.load())
+
+    return documents
+
+def split_documents(documents, chunk_size=1000, chunk_overlap=200):
+    """文档切分"""
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        length_function=len,
+        separators=["\n\n", "\n", "。", "！", "？", ".", " ", ""]
+    )
+    return text_splitter.split_documents(documents)
+
+# ========== 3. 向量数据库操作 ==========
+
+def create_vectorstore(documents, persist_directory=CHROMA_PATH):
+    """创建向量数据库"""
+    # 切分文档
+    chunks = split_documents(documents)
+    print(f"文档切分完成，共 {len(chunks)} 个片段")
+
+    # 创建向量数据库
+    vectorstore = Chroma.from_documents(
+        documents=chunks,
+        embedding=embeddings,
+        persist_directory=persist_directory
+    )
+    print(f"向量数据库已创建: {persist_directory}")
+    return vectorstore
+
+def load_vectorstore(persist_directory=CHROMA_PATH):
+    """加载已有的向量数据库"""
+    return Chroma(
+        persist_directory=persist_directory,
+        embedding_function=embeddings
+    )
+
+# ========== 4. RAG链构建 ==========
+
+def create_rag_chain(vectorstore, k=3):
+    """创建RAG问答链"""
+
+    # 检索器配置
+    retriever = vectorstore.as_retriever(
+        search_type="similarity",  # 相似度搜索
+        search_kwargs={"k": k}     # 返回top-k个结果
+    )
+
+    # 自定义提示模板
+    prompt_template = """基于以下已知信息，简洁和专业地回答用户的问题。
+如果无法从中得到答案，请说"根据已知信息无法回答该问题"，不要编造答案。
+
+已知信息:
+{context}
+
+问题: {question}
+
+回答:"""
+
+    prompt = PromptTemplate(
+        template=prompt_template,
+        input_variables=["context", "question"]
+    )
+
+    # 创建问答链
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",  # 将所有检索到的文档放入一个prompt
+        retriever=retriever,
+        return_source_documents=True,  # 返回源文档
+        chain_type_kwargs={"prompt": prompt}
+    )
+
+    return qa_chain
+
+# ========== 5. 完整RAG应用 ==========
+
+class RAGApplication:
+    """RAG应用封装"""
+
+    def __init__(self, persist_directory=CHROMA_PATH):
+        self.persist_directory = persist_directory
+        self.vectorstore = None
+        self.qa_chain = None
+
+    def index_documents(self, source_path: str):
+        """索引文档"""
+        print(f"正在加载文档: {source_path}")
+        documents = load_documents(source_path)
+        print(f"加载了 {len(documents)} 个文档")
+
+        self.vectorstore = create_vectorstore(
+            documents,
+            self.persist_directory
+        )
+        self.qa_chain = create_rag_chain(self.vectorstore)
+        print("索引完成!")
+
+    def load_index(self):
+        """加载已有索引"""
+        if os.path.exists(self.persist_directory):
+            self.vectorstore = load_vectorstore(self.persist_directory)
+            self.qa_chain = create_rag_chain(self.vectorstore)
+            print("已加载现有索引")
+        else:
+            print("索引不存在，请先调用 index_documents()")
+
+    def query(self, question: str) -> dict:
+        """查询"""
+        if not self.qa_chain:
+            raise ValueError("请先索引文档或加载索引")
+
+        result = self.qa_chain.invoke({"query": question})
+
+        return {
+            "answer": result["result"],
+            "sources": [
+                {
+                    "content": doc.page_content[:200] + "...",
+                    "metadata": doc.metadata
+                }
+                for doc in result["source_documents"]
+            ]
+        }
+
+    def add_documents(self, source_path: str):
+        """追加文档到现有索引"""
+        if not self.vectorstore:
+            self.load_index()
+
+        documents = load_documents(source_path)
+        chunks = split_documents(documents)
+        self.vectorstore.add_documents(chunks)
+        print(f"已追加 {len(chunks)} 个文档片段")
+
+# ========== 6. 使用示例 ==========
+
+if __name__ == "__main__":
+    # 初始化RAG应用
+    rag = RAGApplication()
+
+    # 示例1: 索引本地文档目录
+    # rag.index_documents("./documents")
+
+    # 示例2: 索引单个文件
+    # rag.index_documents("./documents/manual.pdf")
+
+    # 示例3: 使用示例文本创建索引
+    from langchain.schema import Document
+
+    sample_docs = [
+        Document(
+            page_content="""
+            公司员工手册 - 第一章：考勤制度
+
+            1. 工作时间：周一至周五，上午9:00-12:00，下午13:00-18:00
+            2. 迟到定义：超过9:15到达视为迟到
+            3. 请假流程：提前一天在OA系统提交申请，由直属上级审批
+            4. 年假规定：入职满一年后享有5天年假，每增加一年工龄增加1天
+            5. 加班规定：加班需提前申请，工作日加班按1.5倍计算，周末按2倍计算
+            """,
+            metadata={"source": "employee_handbook.txt", "chapter": "考勤制度"}
+        ),
+        Document(
+            page_content="""
+            公司员工手册 - 第二章：报销制度
+
+            1. 差旅报销：需在出差结束后5个工作日内提交
+            2. 交通费：市内交通每日上限100元，需保留发票
+            3. 住宿费：一线城市每晚上限500元，其他城市300元
+            4. 餐饮费：每日上限150元，需保留发票
+            5. 报销流程：填写报销单 → 部门经理审批 → 财务审核 → 打款
+            """,
+            metadata={"source": "employee_handbook.txt", "chapter": "报销制度"}
+        ),
+        Document(
+            page_content="""
+            公司员工手册 - 第三章：福利制度
+
+            1. 五险一金：按国家规定缴纳
+            2. 补充医疗：公司为员工购买补充医疗保险
+            3. 节日福利：春节、中秋等节日发放礼品或购物卡
+            4. 生日福利：生日当月发放200元生日礼金
+            5. 团建活动：每季度组织一次团队活动
+            6. 培训机会：每年可申请外部培训，公司承担费用上限5000元
+            """,
+            metadata={"source": "employee_handbook.txt", "chapter": "福利制度"}
+        )
+    ]
+
+    # 创建索引
+    rag.vectorstore = Chroma.from_documents(
+        documents=sample_docs,
+        embedding=embeddings,
+        persist_directory=CHROMA_PATH
+    )
+    rag.qa_chain = create_rag_chain(rag.vectorstore)
+    print("示例文档索引完成!")
+
+    # 查询测试
+    questions = [
+        "公司的工作时间是几点到几点？",
+        "年假是怎么规定的？",
+        "出差住宿费的标准是多少？",
+        "公司有哪些福利？"
+    ]
+
+    for q in questions:
+        print(f"\n{'='*50}")
+        print(f"问题: {q}")
+        print('='*50)
+        result = rag.query(q)
+        print(f"回答: {result['answer']}")
+        print(f"\n参考来源:")
+        for i, source in enumerate(result['sources'], 1):
+            print(f"  {i}. [{source['metadata'].get('chapter', 'N/A')}] {source['content'][:50]}...")
+```
+
+**RAG工作流程:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         文档索引阶段                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  文档 (PDF/TXT/...)                                            │
+│       │                                                        │
+│       ▼                                                        │
+│  ┌─────────────┐                                               │
+│  │ 文档加载器   │  TextLoader / PyPDFLoader                     │
+│  └──────┬──────┘                                               │
+│         │                                                      │
+│         ▼                                                      │
+│  ┌─────────────┐                                               │
+│  │ 文档切分器   │  RecursiveCharacterTextSplitter              │
+│  └──────┬──────┘  chunk_size=1000, overlap=200                 │
+│         │                                                      │
+│         ▼                                                      │
+│  ┌─────────────┐                                               │
+│  │ Embedding   │  HuggingFaceEmbeddings                        │
+│  │ 向量化      │  文本 → 768维向量                              │
+│  └──────┬──────┘                                               │
+│         │                                                      │
+│         ▼                                                      │
+│  ┌─────────────┐                                               │
+│  │ Chroma DB   │  向量数据库存储                                │
+│  │ 向量存储    │  persist_directory="./chroma_db"              │
+│  └─────────────┘                                               │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                         查询阶段                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  用户问题: "年假是怎么规定的？"                                   │
+│       │                                                        │
+│       ▼                                                        │
+│  ┌─────────────┐                                               │
+│  │ Embedding   │  问题向量化                                    │
+│  └──────┬──────┘                                               │
+│         │                                                      │
+│         ▼                                                      │
+│  ┌─────────────┐      相似度搜索                               │
+│  │ Retriever   │ ─────────────────►  Chroma DB                │
+│  └──────┬──────┘      top-k=3                                 │
+│         │                                                      │
+│         │  检索到的相关文档片段                                 │
+│         ▼                                                      │
+│  ┌─────────────────────────────────────────────┐               │
+│  │ Prompt Template                              │               │
+│  │                                              │               │
+│  │ 已知信息:                                    │               │
+│  │ {检索到的文档内容}                            │               │
+│  │                                              │               │
+│  │ 问题: {用户问题}                              │               │
+│  └──────────────────────┬──────────────────────┘               │
+│                         │                                      │
+│                         ▼                                      │
+│                  ┌─────────────┐                               │
+│                  │    LLM      │  本地API (gpt-5)              │
+│                  └──────┬──────┘                               │
+│                         │                                      │
+│                         ▼                                      │
+│                   生成回答 + 源文档引用                          │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### LangChain 依赖安装
+
+```bash
+# 基础依赖
+pip install langchain langchain-openai langchain-community
+
+# Agent相关
+pip install langchainhub
+
+# RAG相关 (向量数据库)
+pip install chromadb sentence-transformers
+
+# 文档加载器
+pip install pypdf  # PDF支持
+pip install unstructured  # 更多格式支持
+```
+
 ---
 
 ## 配置说明
@@ -429,7 +980,20 @@ internal-llm-api/
 │                                   - /v1/models
 │                                   - /v1/debug/selectors
 │
+├── examples/                     # 使用示例
+│   ├── demo.py                   # 基础使用示例
+│   ├── agent_example.py          # LangChain Agent示例
+│   │                               - 多工具定义(计算器/搜索/时间等)
+│   │                               - ReAct Agent自动选择工具
+│   │                               - 交互式对话模式
+│   │
+│   └── rag_example.py            # LangChain RAG示例
+│                                   - Chroma向量数据库
+│                                   - 文档加载/切分/向量化
+│                                   - 检索增强问答
+│
 ├── edge_data/                    # Edge用户数据目录 (自动创建)
+├── chroma_db/                    # 向量数据库目录 (RAG示例创建)
 ├── debug/                        # 调试截图目录
 ├── logs/                         # 日志目录
 │
@@ -477,3 +1041,40 @@ curl http://127.0.0.1:9222/json/version
 ### 调试模式
 
 错误时会在 `./debug/` 目录保存截图，用于诊断页面状态。
+
+---
+
+## 示例运行
+
+### 运行Agent示例
+
+```bash
+# 安装依赖
+pip install langchain langchain-openai langchainhub
+
+# 交互模式
+python examples/agent_example.py
+
+# 演示模式
+python examples/agent_example.py --demo
+```
+
+### 运行RAG示例
+
+```bash
+# 安装依赖
+pip install langchain langchain-openai langchain-community
+pip install chromadb sentence-transformers
+
+# 交互模式（首次运行会创建示例索引）
+python examples/rag_example.py
+
+# 演示模式
+python examples/rag_example.py --demo
+
+# 索引自己的文档
+python examples/rag_example.py --index ./my_documents
+
+# 追加文档到已有索引
+python examples/rag_example.py --add ./new_document.txt
+```
