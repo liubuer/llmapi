@@ -60,7 +60,7 @@ async def chat_completions(request: ChatCompletionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def stream_response(client, request) -> AsyncGenerator[str, None]:
+async def stream_response(client, request) -> AsyncGenerator[dict, None]:
     try:
         response_id = f"chatcmpl-{int(time.time())}"
         stream = await client.chat(
@@ -68,17 +68,18 @@ async def stream_response(client, request) -> AsyncGenerator[str, None]:
             model=request.model,
             stream=True
         )
-        
+
         async for chunk in stream:
-            data = {
-                "id": response_id,
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": request.model,
-                "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}]
-            }
-            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-        
+            if chunk:  # Only yield non-empty chunks
+                data = {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": request.model,
+                    "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}]
+                }
+                yield {"data": json.dumps(data, ensure_ascii=False)}
+
         final = {
             "id": response_id,
             "object": "chat.completion.chunk",
@@ -86,12 +87,20 @@ async def stream_response(client, request) -> AsyncGenerator[str, None]:
             "model": request.model,
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
         }
-        yield f"data: {json.dumps(final)}\n\n"
-        yield "data: [DONE]\n\n"
-        
+        yield {"data": json.dumps(final, ensure_ascii=False)}
+        yield {"data": "[DONE]"}
+
     except Exception as e:
         logger.error(f"流式错误: {e}")
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        error_data = {
+            "id": f"chatcmpl-{int(time.time())}",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": request.model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+        }
+        yield {"data": json.dumps(error_data, ensure_ascii=False)}
+        yield {"data": "[DONE]"}
 
 
 @router.get("/models")
