@@ -1,18 +1,18 @@
 """
-LangChain RAG (检索增强生成) 示例
+LangChain RAG（検索拡張生成）サンプル
 
-功能：
-- 使用Chroma向量数据库存储文档
-- 支持多种文档格式（TXT、PDF）
-- 文档切分和向量化
-- 基于检索的问答
+機能：
+- Chromaベクトルデータベースにドキュメントを保存
+- 複数のドキュメント形式に対応（TXT、PDF）
+- ドキュメントの分割とベクトル化
+- 検索に基づく質疑応答
 
-依赖安装：
+依存関係のインストール：
     pip install langchain langchain-openai langchain-community
     pip install chromadb sentence-transformers
-    pip install pypdf  # PDF支持
+    pip install pypdf  # PDFサポート
 
-运行前确保API服务已启动：
+実行前にAPIサービスが起動していることを確認：
     start.bat api
 """
 import os
@@ -26,9 +26,9 @@ from langchain_core.prompts import PromptTemplate
 from langchain.schema import Document
 
 
-# ========== 1. 配置 ==========
+# ========== 1. 設定 ==========
 
-# LLM配置 - 连接到本地API
+# LLM設定 - ローカルAPIに接続
 llm = ChatOpenAI(
     base_url="http://localhost:8000/v1",
     api_key="not-needed",
@@ -36,47 +36,47 @@ llm = ChatOpenAI(
     temperature=0
 )
 
-# Embedding模型 - 使用HuggingFace本地模型（无需外部API）
-# 首次运行会自动下载模型（约500MB）
-print("正在加载Embedding模型...")
+# Embeddingモデル - HuggingFaceローカルモデルを使用（外部API不要）
+# 初回実行時にモデルを自動ダウンロード（約500MB）
+print("Embeddingモデルを読み込み中...")
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     model_kwargs={'device': 'cpu'},
     encode_kwargs={'normalize_embeddings': True}
 )
-print("Embedding模型加载完成!")
+print("Embeddingモデルの読み込み完了!")
 
-# 向量数据库存储路径
+# ベクトルデータベースの保存パス
 CHROMA_PATH = "./chroma_db"
 
 
-# ========== 2. 文档处理 ==========
+# ========== 2. ドキュメント処理 ==========
 
 def load_text_file(filepath: str) -> list:
-    """加载文本文件"""
+    """テキストファイルを読み込み"""
     from langchain_community.document_loaders import TextLoader
     loader = TextLoader(filepath, encoding='utf-8')
     return loader.load()
 
 
 def load_pdf_file(filepath: str) -> list:
-    """加载PDF文件"""
+    """PDFファイルを読み込み"""
     try:
         from langchain_community.document_loaders import PyPDFLoader
         loader = PyPDFLoader(filepath)
         return loader.load()
     except ImportError:
-        print("请安装pypdf: pip install pypdf")
+        print("pypdfをインストールしてください: pip install pypdf")
         return []
 
 
 def load_directory(dir_path: str) -> list:
-    """加载目录下所有文档"""
+    """ディレクトリ内の全ドキュメントを読み込み"""
     from langchain_community.document_loaders import DirectoryLoader, TextLoader
 
     documents = []
 
-    # 加载txt文件
+    # txtファイルを読み込み
     txt_loader = DirectoryLoader(
         dir_path,
         glob="**/*.txt",
@@ -85,7 +85,7 @@ def load_directory(dir_path: str) -> list:
     )
     documents.extend(txt_loader.load())
 
-    # 加载pdf文件
+    # pdfファイルを読み込み
     try:
         from langchain_community.document_loaders import PyPDFLoader
         pdf_loader = DirectoryLoader(
@@ -95,13 +95,13 @@ def load_directory(dir_path: str) -> list:
         )
         documents.extend(pdf_loader.load())
     except ImportError:
-        print("提示：安装pypdf以支持PDF文件")
+        print("ヒント：pypdfをインストールするとPDFファイルに対応できます")
 
     return documents
 
 
 def split_documents(documents: list, chunk_size: int = 1000, chunk_overlap: int = 200) -> list:
-    """文档切分"""
+    """ドキュメントを分割"""
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -111,28 +111,28 @@ def split_documents(documents: list, chunk_size: int = 1000, chunk_overlap: int 
     return text_splitter.split_documents(documents)
 
 
-# ========== 3. 向量数据库 ==========
+# ========== 3. ベクトルデータベース ==========
 
 def create_vectorstore(documents: list, persist_dir: str = CHROMA_PATH):
-    """创建向量数据库"""
-    # 切分文档
+    """ベクトルデータベースを作成"""
+    # ドキュメントを分割
     chunks = split_documents(documents)
-    print(f"文档切分完成，共 {len(chunks)} 个片段")
+    print(f"ドキュメント分割完了、合計 {len(chunks)} 個のフラグメント")
 
-    # 创建向量数据库
+    # ベクトルデータベースを作成
     vectorstore = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
         persist_directory=persist_dir
     )
-    print(f"向量数据库已创建: {persist_dir}")
+    print(f"ベクトルデータベースを作成しました: {persist_dir}")
     return vectorstore
 
 
 def load_vectorstore(persist_dir: str = CHROMA_PATH):
-    """加载已有的向量数据库"""
+    """既存のベクトルデータベースを読み込み"""
     if not os.path.exists(persist_dir):
-        raise FileNotFoundError(f"向量数据库不存在: {persist_dir}")
+        raise FileNotFoundError(f"ベクトルデータベースが存在しません: {persist_dir}")
 
     return Chroma(
         persist_directory=persist_dir,
@@ -140,29 +140,29 @@ def load_vectorstore(persist_dir: str = CHROMA_PATH):
     )
 
 
-# ========== 4. RAG链 ==========
+# ========== 4. RAGチェーン ==========
 
 def create_qa_chain(vectorstore, k: int = 3):
-    """创建问答链"""
+    """質疑応答チェーンを作成"""
 
-    # 检索器
+    # リトリーバー
     retriever = vectorstore.as_retriever(
         search_type="similarity",
         search_kwargs={"k": k}
     )
 
-    # 自定义提示模板
-    prompt_template = """你是一个专业的问答助手。请根据以下提供的参考信息来回答问题。
+    # カスタムプロンプトテンプレート
+    prompt_template = """あなたはプロフェッショナルな質疑応答アシスタントです。以下の参考情報に基づいて質問に回答してください。
 
-要求：
-1. 只根据提供的参考信息回答，不要编造
-2. 如果参考信息中没有相关内容，请明确说明"根据已知信息无法回答"
-3. 回答要准确、简洁、专业
+要件：
+1. 提供された参考情報のみに基づいて回答し、作り話をしないでください
+2. 参考情報に関連する内容がない場合は、「既知の情報では回答できません」と明確に述べてください
+3. 回答は正確、簡潔、専門的であること
 
-参考信息：
+参考情報：
 {context}
 
-问题：{question}
+質問：{question}
 
 回答："""
 
@@ -171,7 +171,7 @@ def create_qa_chain(vectorstore, k: int = 3):
         input_variables=["context", "question"]
     )
 
-    # 创建问答链
+    # 質疑応答チェーンを作成
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
@@ -183,10 +183,10 @@ def create_qa_chain(vectorstore, k: int = 3):
     return qa_chain
 
 
-# ========== 5. RAG应用类 ==========
+# ========== 5. RAGアプリケーションクラス ==========
 
 class RAGApplication:
-    """RAG应用封装"""
+    """RAGアプリケーションのラッパー"""
 
     def __init__(self, persist_dir: str = CHROMA_PATH):
         self.persist_dir = persist_dir
@@ -194,8 +194,8 @@ class RAGApplication:
         self.qa_chain = None
 
     def index_documents(self, source: str):
-        """索引文档（文件或目录）"""
-        print(f"正在索引: {source}")
+        """ドキュメントをインデックス化（ファイルまたはディレクトリ）"""
+        print(f"インデックス作成中: {source}")
 
         if os.path.isfile(source):
             if source.endswith('.pdf'):
@@ -205,18 +205,18 @@ class RAGApplication:
         elif os.path.isdir(source):
             documents = load_directory(source)
         else:
-            raise FileNotFoundError(f"路径不存在: {source}")
+            raise FileNotFoundError(f"パスが存在しません: {source}")
 
         if not documents:
-            raise ValueError("未加载到任何文档")
+            raise ValueError("ドキュメントが読み込めませんでした")
 
-        print(f"加载了 {len(documents)} 个文档")
+        print(f"{len(documents)} 個のドキュメントを読み込みました")
         self.vectorstore = create_vectorstore(documents, self.persist_dir)
         self.qa_chain = create_qa_chain(self.vectorstore)
-        print("索引完成!")
+        print("インデックス作成完了!")
 
     def index_texts(self, texts: list, metadatas: list = None):
-        """直接索引文本列表"""
+        """テキストリストを直接インデックス化"""
         documents = []
         for i, text in enumerate(texts):
             metadata = metadatas[i] if metadatas and i < len(metadatas) else {"source": f"text_{i}"}
@@ -224,18 +224,18 @@ class RAGApplication:
 
         self.vectorstore = create_vectorstore(documents, self.persist_dir)
         self.qa_chain = create_qa_chain(self.vectorstore)
-        print("文本索引完成!")
+        print("テキストのインデックス作成完了!")
 
     def load(self):
-        """加载已有索引"""
+        """既存のインデックスを読み込み"""
         self.vectorstore = load_vectorstore(self.persist_dir)
         self.qa_chain = create_qa_chain(self.vectorstore)
-        print("已加载现有索引")
+        print("既存のインデックスを読み込みました")
 
     def query(self, question: str) -> dict:
-        """查询"""
+        """クエリ"""
         if not self.qa_chain:
-            raise ValueError("请先索引文档或加载索引")
+            raise ValueError("先にドキュメントをインデックス化するか、インデックスを読み込んでください")
 
         result = self.qa_chain.invoke({"query": question})
 
@@ -251,7 +251,7 @@ class RAGApplication:
         }
 
     def add_documents(self, source: str):
-        """追加文档"""
+        """ドキュメントを追加"""
         if not self.vectorstore:
             self.load()
 
@@ -265,12 +265,12 @@ class RAGApplication:
 
         chunks = split_documents(documents)
         self.vectorstore.add_documents(chunks)
-        print(f"已追加 {len(chunks)} 个文档片段")
+        print(f"{len(chunks)} 個のドキュメントフラグメントを追加しました")
 
     def search(self, query: str, k: int = 5) -> list:
-        """相似度搜索（仅检索，不生成回答）"""
+        """類似度検索（検索のみ、回答生成なし）"""
         if not self.vectorstore:
-            raise ValueError("请先索引文档或加载索引")
+            raise ValueError("先にドキュメントをインデックス化するか、インデックスを読み込んでください")
 
         results = self.vectorstore.similarity_search(query, k=k)
         return [
@@ -282,263 +282,260 @@ class RAGApplication:
         ]
 
 
-# ========== 6. 示例数据 ==========
+# ========== 6. サンプルデータ ==========
 
 SAMPLE_DOCUMENTS = [
     {
-        "content": """公司员工手册 - 第一章：考勤制度
+        "content": """社員ハンドブック - 第一章：勤怠制度
 
-1. 工作时间
-   - 标准工作时间：周一至周五，上午9:00-12:00，下午13:00-18:00
-   - 午休时间：12:00-13:00
-   - 每周工作时间不超过40小时
+1. 勤務時間
+   - 標準勤務時間：月曜日から金曜日、午前9:00-12:00、午後13:00-18:00
+   - 昼休み：12:00-13:00
+   - 週間勤務時間は40時間を超えないこと
 
-2. 打卡规定
-   - 所有员工需通过公司APP或打卡机进行上下班打卡
-   - 迟到定义：超过9:15到达视为迟到
-   - 早退定义：未经批准在17:30前离开视为早退
-   - 每月迟到/早退超过3次将影响绩效考核
+2. 打刻規定
+   - 全社員は会社のアプリまたは打刻機で出退勤の打刻を行うこと
+   - 遅刻の定義：9:15を超えて到着した場合は遅刻とみなす
+   - 早退の定義：承認なく17:30前に退社した場合は早退とみなす
+   - 月間の遅刻/早退が3回を超えると人事評価に影響
 
-3. 请假流程
-   - 提前一天在OA系统提交申请
-   - 由直属上级审批
-   - 紧急情况可先电话请假，事后补交申请
-   - 病假需提供医院证明
+3. 休暇申請手順
+   - 1日前にOAシステムで申請を提出
+   - 直属上司が承認
+   - 緊急の場合は電話で事前連絡し、事後申請を提出
+   - 病気休暇は病院の証明書が必要
 
-4. 年假规定
-   - 入职满一年后享有5天年假
-   - 每增加一年工龄增加1天，最多15天
-   - 年假需提前3天申请
-   - 当年未休完的年假可顺延至次年第一季度
+4. 年次有給休暇規定
+   - 入社1年後に5日の年次有給休暇を付与
+   - 勤続年数1年増加ごとに1日追加、最大15日
+   - 年次有給休暇は3日前に申請が必要
+   - 当年度未消化の年次有給休暇は翌年度第1四半期まで繰り越し可能
 
-5. 加班规定
-   - 加班需提前在系统中申请
-   - 工作日加班按1.5倍计算
-   - 周末加班按2倍计算
-   - 法定节假日加班按3倍计算
-   - 可选择调休或加班费""",
-        "metadata": {"source": "employee_handbook.txt", "chapter": "考勤制度"}
+5. 残業規定
+   - 残業は事前にシステムで申請が必要
+   - 平日の残業は1.5倍で計算
+   - 週末の残業は2倍で計算
+   - 法定祝日の残業は3倍で計算
+   - 振替休日または残業手当を選択可能""",
+        "metadata": {"source": "employee_handbook.txt", "chapter": "勤怠制度"}
     },
     {
-        "content": """公司员工手册 - 第二章：报销制度
+        "content": """社員ハンドブック - 第二章：経費精算制度
 
-1. 报销原则
-   - 费用必须与工作相关
-   - 需提供正规发票或收据
-   - 报销需在费用发生后30天内提交
+1. 精算原則
+   - 費用は業務に関連するものであること
+   - 正規の領収書またはレシートの提出が必要
+   - 精算は費用発生後30日以内に提出すること
 
-2. 差旅报销
-   - 需在出差结束后5个工作日内提交
-   - 需附出差申请单、行程单、发票等
+2. 出張経費精算
+   - 出張終了後5営業日以内に提出すること
+   - 出張申請書、行程表、領収書等を添付すること
 
-3. 交通费标准
-   - 市内交通每日上限100元
-   - 出租车需在公司APP叫车或保留发票
-   - 长途交通：火车二等座、飞机经济舱
+3. 交通費基準
+   - 市内交通は1日あたり上限10,000円
+   - タクシーは会社のアプリで手配するか、領収書を保管すること
+   - 長距離交通：新幹線普通車、飛行機エコノミークラス
 
-4. 住宿费标准
-   - 一线城市（北上广深）：每晚上限500元
-   - 二线城市：每晚上限400元
-   - 其他城市：每晚上限300元
-   - 需通过公司合作平台预订
+4. 宿泊費基準
+   - 東京・大阪等の大都市：1泊あたり上限15,000円
+   - その他の都市：1泊あたり上限10,000円
+   - 会社提携プラットフォームでの予約が必要
 
-5. 餐饮费标准
-   - 出差期间每日餐饮上限150元
-   - 商务宴请需提前申请，标准另行规定
+5. 食事代基準
+   - 出張期間中の食事代は1日あたり上限3,000円
+   - 接待は事前申請が必要、基準は別途規定
 
-6. 报销流程
-   - 第一步：填写报销单，附上所有票据
-   - 第二步：部门经理审批
-   - 第三步：财务部审核
-   - 第四步：审核通过后5个工作日内打款到工资账户""",
-        "metadata": {"source": "employee_handbook.txt", "chapter": "报销制度"}
+6. 精算手順
+   - 第一ステップ：精算書に記入し、全ての証票を添付
+   - 第二ステップ：部門マネージャーの承認
+   - 第三ステップ：経理部の審査
+   - 第四ステップ：審査通過後5営業日以内に給与口座に振込""",
+        "metadata": {"source": "employee_handbook.txt", "chapter": "経費精算制度"}
     },
     {
-        "content": """公司员工手册 - 第三章：福利制度
+        "content": """社員ハンドブック - 第三章：福利厚生制度
 
-1. 社会保险
-   - 公司按国家规定缴纳五险一金
-   - 包括：养老保险、医疗保险、失业保险、工伤保险、生育保险、住房公积金
-   - 公积金缴纳比例：公司12%，个人12%
+1. 社会保険
+   - 会社は法律に基づき社会保険と厚生年金に加入
+   - 健康保険、厚生年金保険、雇用保険、労災保険を含む
 
-2. 补充保险
-   - 公司为正式员工购买补充医疗保险
-   - 补充医疗保险可报销社保外的医疗费用，年度上限5万元
-   - 为管理层购买商业意外险
+2. 補充保険
+   - 会社は正社員に団体医療保険を提供
+   - 団体医療保険は社会保険適用外の医療費をカバー、年間上限50万円
+   - 管理職には商業傷害保険を提供
 
-3. 节日福利
-   - 春节：发放礼品或购物卡（价值500元）
-   - 中秋节：发放月饼礼盒
-   - 端午节：发放粽子礼盒
-   - 妇女节：女员工半天假+礼品
+3. 祝日福利
+   - 年末年始：ギフトまたは商品券を支給（5,000円相当）
+   - お盆：ギフトセットを支給
+   - ゴールデンウィーク：特別休暇
 
-4. 生日福利
-   - 生日当月发放200元生日礼金
-   - 部门组织生日会
+4. 誕生日福利
+   - 誕生月に20,000円の誕生日祝い金を支給
+   - 部門で誕生日会を開催
 
 5. 健康福利
-   - 每年一次免费体检
-   - 健身房补贴：每月200元
-   - 心理咨询服务：每年6次免费咨询
+   - 年1回の無料健康診断
+   - フィットネスジム補助：月額5,000円
+   - メンタルヘルス相談サービス：年6回無料相談
 
-6. 团建活动
-   - 每季度组织一次团队活动
-   - 年度旅游：根据公司业绩安排
+6. チームビルディング活動
+   - 四半期ごとにチーム活動を1回開催
+   - 年間旅行：会社の業績に応じて実施
 
-7. 培训机会
-   - 每年可申请外部培训
-   - 公司承担费用上限5000元
-   - 需与工作相关并签订服务协议
+7. 研修機会
+   - 毎年外部研修を申請可能
+   - 会社負担の上限は50万円
+   - 業務関連であり、サービス契約の締結が必要
 
-8. 其他福利
-   - 结婚礼金：1000元
-   - 生育礼金：2000元
-   - 丧葬慰问金：2000元
-   - 住院慰问：500元""",
-        "metadata": {"source": "employee_handbook.txt", "chapter": "福利制度"}
+8. その他の福利
+   - 結婚祝い金：50,000円
+   - 出産祝い金：100,000円
+   - 弔慰金：100,000円
+   - 入院見舞金：30,000円""",
+        "metadata": {"source": "employee_handbook.txt", "chapter": "福利厚生制度"}
     },
     {
-        "content": """公司员工手册 - 第四章：绩效考核
+        "content": """社員ハンドブック - 第四章：人事評価
 
-1. 考核周期
-   - 季度考核：每季度末进行
-   - 年度考核：每年12月进行
+1. 評価サイクル
+   - 四半期評価：各四半期末に実施
+   - 年度評価：毎年12月に実施
 
-2. 考核维度
-   - 工作业绩（50%）：KPI完成情况
-   - 工作能力（30%）：专业技能、学习能力、创新能力
-   - 工作态度（20%）：责任心、团队协作、主动性
+2. 評価項目
+   - 業務実績（50%）：KPI達成状況
+   - 業務能力（30%）：専門スキル、学習能力、イノベーション能力
+   - 業務態度（20%）：責任感、チームワーク、主体性
 
-3. 考核等级
-   - A级（优秀）：10%名额，绩效系数1.5
-   - B级（良好）：30%名额，绩效系数1.2
-   - C级（合格）：50%名额，绩效系数1.0
-   - D级（待改进）：10%名额，绩效系数0.8
+3. 評価ランク
+   - Aランク（優秀）：10%の枠、評価係数1.5
+   - Bランク（良好）：30%の枠、評価係数1.2
+   - Cランク（合格）：50%の枠、評価係数1.0
+   - Dランク（改善必要）：10%の枠、評価係数0.8
 
-4. 考核结果应用
-   - 与年终奖挂钩
-   - 作为晋升参考
-   - 连续两次D级将进行绩效改进计划
+4. 評価結果の活用
+   - 年末賞与と連動
+   - 昇進の参考資料
+   - 連続2回Dランクの場合は業績改善計画を実施
 
-5. 申诉机制
-   - 员工对考核结果有异议可在5个工作日内申诉
-   - 由HR部门组织复核""",
-        "metadata": {"source": "employee_handbook.txt", "chapter": "绩效考核"}
+5. 異議申し立て制度
+   - 社員は評価結果に対して5営業日以内に異議申し立て可能
+   - 人事部が再審査を実施""",
+        "metadata": {"source": "employee_handbook.txt", "chapter": "人事評価"}
     }
 ]
 
 
-# ========== 7. 交互模式 ==========
+# ========== 7. インタラクティブモード ==========
 
 def interactive_mode(rag: RAGApplication):
-    """交互式问答"""
+    """インタラクティブ質疑応答"""
     print("\n" + "="*60)
-    print("  RAG 问答系统 - 交互模式")
-    print("  基于公司员工手册的智能问答")
-    print("  - 输入问题进行查询")
-    print("  - 输入 'search:关键词' 进行相似度搜索")
-    print("  - 输入 'quit' 或 'exit' 退出")
+    print("  RAG 質疑応答システム - インタラクティブモード")
+    print("  社員ハンドブックに基づくスマート質疑応答")
+    print("  - 質問を入力してクエリ")
+    print("  - 'search:キーワード' で類似度検索")
+    print("  - 'quit' または 'exit' で終了")
     print("="*60 + "\n")
 
     while True:
         try:
-            user_input = input("\n问题: ").strip()
+            user_input = input("\n質問: ").strip()
 
             if not user_input:
                 continue
 
             if user_input.lower() in ['quit', 'exit', 'q']:
-                print("再见!")
+                print("さようなら!")
                 break
 
             if user_input.startswith('search:'):
-                # 相似度搜索模式
+                # 類似度検索モード
                 query = user_input[7:].strip()
                 results = rag.search(query, k=3)
                 print("\n" + "-"*40)
-                print("搜索结果:")
+                print("検索結果:")
                 for i, r in enumerate(results, 1):
                     print(f"\n[{i}] {r['metadata']}")
                     print(f"    {r['content'][:150]}...")
             else:
-                # 问答模式
+                # 質疑応答モード
                 result = rag.query(user_input)
                 print("\n" + "-"*40)
                 print(f"回答: {result['answer']}")
-                print("\n参考来源:")
+                print("\n参考ソース:")
                 for i, source in enumerate(result['sources'], 1):
                     chapter = source['metadata'].get('chapter', 'N/A')
                     print(f"  [{i}] {chapter}: {source['content'][:80]}...")
 
         except KeyboardInterrupt:
-            print("\n\n已中断")
+            print("\n\n中断されました")
             break
         except Exception as e:
-            print(f"\n错误: {e}")
+            print(f"\nエラー: {e}")
 
 
 def run_demo(rag: RAGApplication):
-    """运行演示"""
+    """デモを実行"""
     questions = [
-        "公司的工作时间是什么？",
-        "年假有多少天？怎么计算的？",
-        "出差住宿费的标准是多少？",
-        "公司有哪些福利？",
-        "绩效考核是怎么评定的？",
-        "加班费怎么计算？"
+        "会社の勤務時間は何時から何時までですか？",
+        "年次有給休暇は何日ありますか？どのように計算されますか？",
+        "出張時の宿泊費の基準はいくらですか？",
+        "会社にはどのような福利厚生がありますか？",
+        "人事評価はどのように行われますか？",
+        "残業手当はどのように計算されますか？"
     ]
 
     print("\n" + "="*60)
-    print("  RAG 示例演示")
+    print("  RAG サンプルデモ")
     print("="*60)
 
     for q in questions:
         print(f"\n{'='*50}")
-        print(f"问题: {q}")
+        print(f"質問: {q}")
         print('='*50)
 
         result = rag.query(q)
         print(f"\n回答: {result['answer']}")
-        print("\n参考来源:")
+        print("\n参考ソース:")
         for i, source in enumerate(result['sources'], 1):
             chapter = source['metadata'].get('chapter', 'N/A')
             print(f"  [{i}] {chapter}")
 
 
-# ========== 主程序 ==========
+# ========== メインプログラム ==========
 
 if __name__ == "__main__":
     import sys
 
-    # 初始化RAG应用
+    # RAGアプリケーションを初期化
     rag = RAGApplication()
 
-    # 检查是否已有索引
+    # 既存のインデックスがあるか確認
     if os.path.exists(CHROMA_PATH) and os.listdir(CHROMA_PATH):
-        print("检测到已有索引，正在加载...")
+        print("既存のインデックスを検出、読み込み中...")
         rag.load()
     else:
-        print("创建示例文档索引...")
-        # 使用示例数据创建索引
+        print("サンプルドキュメントのインデックスを作成中...")
+        # サンプルデータでインデックスを作成
         texts = [doc["content"] for doc in SAMPLE_DOCUMENTS]
         metadatas = [doc["metadata"] for doc in SAMPLE_DOCUMENTS]
         rag.index_texts(texts, metadatas)
 
-    # 运行模式
+    # 実行モード
     if len(sys.argv) > 1:
         if sys.argv[1] == "--demo":
             run_demo(rag)
         elif sys.argv[1] == "--index" and len(sys.argv) > 2:
-            # 索引指定文档
+            # 指定ドキュメントをインデックス化
             rag.index_documents(sys.argv[2])
         elif sys.argv[1] == "--add" and len(sys.argv) > 2:
-            # 追加文档
+            # ドキュメントを追加
             rag.add_documents(sys.argv[2])
         else:
-            print("用法:")
-            print("  python rag_example.py          # 交互模式")
-            print("  python rag_example.py --demo   # 运行演示")
-            print("  python rag_example.py --index <path>  # 索引文档")
-            print("  python rag_example.py --add <path>    # 追加文档")
+            print("使用方法:")
+            print("  python rag_example.py          # インタラクティブモード")
+            print("  python rag_example.py --demo   # デモを実行")
+            print("  python rag_example.py --index <path>  # ドキュメントをインデックス化")
+            print("  python rag_example.py --add <path>    # ドキュメントを追加")
     else:
         interactive_mode(rag)

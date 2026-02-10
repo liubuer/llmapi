@@ -1,18 +1,18 @@
 """
-长驻Edge进程管理器
+常駐Edgeプロセスマネージャー
 
-核心策略：
-1. 启动Edge并手动登录一次
-2. 保持Edge进程持续运行（不关闭）
-3. API通过CDP协议连接到已登录的Edge
-4. 复用已认证的浏览器会话
+コア戦略：
+1. Edgeを起動し、手動で一度ログイン
+2. Edgeプロセスを常時稼働（終了しない）
+3. APIがCDPプロトコルでログイン済みEdgeに接続
+4. 認証済みブラウザセッションを再利用
 """
 import asyncio
 import subprocess
 import platform
 import os
 import sys
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -26,9 +26,9 @@ from .config import get_settings
 
 
 def get_edge_path() -> str:
-    """获取Edge浏览器可执行文件路径"""
+    """Edgeブラウザの実行ファイルパスを取得"""
     system = platform.system()
-    
+
     if system == "Windows":
         paths = [
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -39,24 +39,24 @@ def get_edge_path() -> str:
         paths = ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
     else:
         paths = ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable"]
-    
+
     for path in paths:
         if os.path.exists(path):
             return path
-    
-    return "msedge"  # 尝试PATH中的命令
+
+    return "msedge"  # PATH内のコマンドを試行
 
 
 @dataclass
 class BrowserSession:
-    """浏览器会话"""
+    """ブラウザセッション"""
     session_id: str
     page: Page
     created_at: datetime = field(default_factory=datetime.now)
     last_used: datetime = field(default_factory=datetime.now)
     is_busy: bool = False
     message_count: int = 0
-    
+
     def mark_used(self):
         self.last_used = datetime.now()
         self.message_count += 1
@@ -64,27 +64,27 @@ class BrowserSession:
 
 class EdgeManager:
     """
-    长驻Edge进程管理器
-    
-    使用方式：
-    1. 运行 start_edge_with_debug() 启动Edge（带调试端口）
-    2. 在Edge中手动登录
-    3. 保持Edge运行，启动API服务
-    4. API通过CDP连接到已登录的Edge
+    常駐Edgeプロセスマネージャー
+
+    使用方法：
+    1. start_edge_with_debug() でEdgeを起動（デバッグポート付き）
+    2. Edgeで手動ログイン
+    3. Edgeを稼働したまま、APIサービスを起動
+    4. APIがCDPでログイン済みEdgeに接続
     """
-    
+
     _instance: Optional["EdgeManager"] = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
-        
+
         self.settings = get_settings()
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
@@ -93,21 +93,26 @@ class EdgeManager:
         self._session_lock = asyncio.Lock()
         self._connected = False
         self._edge_process: Optional[subprocess.Popen] = None
+        # conversation tracking: conversation_id -> session_id
+        self._conversations: Dict[str, str] = {}
+        # conversation last activity: conversation_id -> datetime
+        self._conversation_timeouts: Dict[str, datetime] = {}
+        self._conversation_timeout_seconds = 1800  # 30 minutes
         self._initialized = True
-    
+
     def start_edge_with_debug(self, headless: bool = False) -> subprocess.Popen:
         """
-        启动带调试端口的Edge浏览器
-        
-        这个Edge进程会一直运行，直到手动关闭
+        デバッグポート付きEdgeブラウザを起動
+
+        このEdgeプロセスは手動で閉じるまで稼働し続けます
         """
         edge_path = get_edge_path()
         debug_port = self.settings.edge_debug_port
-        
-        # 使用独立的用户数据目录（避免与正常Edge冲突）
+
+        # 独立したユーザーデータディレクトリを使用（通常のEdgeとの競合を回避）
         user_data_dir = Path("./edge_data").absolute()
         user_data_dir.mkdir(exist_ok=True)
-        
+
         args = [
             edge_path,
             f"--remote-debugging-port={debug_port}",
@@ -117,15 +122,15 @@ class EdgeManager:
             "--disable-backgrounding-occluded-windows",
             "--disable-renderer-backgrounding",
         ]
-        
+
         if headless:
             args.append("--headless=new")
-        
-        logger.info(f"启动Edge浏览器: {edge_path}")
-        logger.info(f"调试端口: {debug_port}")
-        logger.info(f"用户数据目录: {user_data_dir}")
-        
-        # 启动Edge进程
+
+        logger.info(f"Edgeブラウザを起動: {edge_path}")
+        logger.info(f"デバッグポート: {debug_port}")
+        logger.info(f"ユーザーデータディレクトリ: {user_data_dir}")
+
+        # Edgeプロセスを起動
         if platform.system() == "Windows":
             self._edge_process = subprocess.Popen(
                 args,
@@ -139,51 +144,51 @@ class EdgeManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
-        
+
         return self._edge_process
-    
+
     async def connect_to_edge(self, max_retries: int = 10) -> bool:
-        """连接到已运行的Edge浏览器"""
+        """稼働中のEdgeブラウザに接続"""
         debug_port = self.settings.edge_debug_port
         cdp_url = f"http://127.0.0.1:{debug_port}"
-        
-        logger.info(f"尝试连接到Edge: {cdp_url}")
-        
+
+        logger.info(f"Edgeへの接続を試行: {cdp_url}")
+
         for attempt in range(max_retries):
             try:
                 if not self._playwright:
                     self._playwright = await async_playwright().start()
-                
+
                 self._browser = await self._playwright.chromium.connect_over_cdp(
                     cdp_url,
                     timeout=10000
                 )
-                
-                # 获取已有的上下文
+
+                # 既存のコンテキストを取得
                 contexts = self._browser.contexts
                 if contexts:
                     self._context = contexts[0]
-                    logger.info(f"已连接到Edge，找到 {len(contexts)} 个上下文")
+                    logger.info(f"Edgeに接続完了、{len(contexts)} 個のコンテキストを発見")
                 else:
                     self._context = await self._browser.new_context()
-                    logger.info("已连接到Edge，创建了新上下文")
-                
+                    logger.info("Edgeに接続完了、新しいコンテキストを作成")
+
                 self._connected = True
                 return True
-                
+
             except Exception as e:
-                logger.warning(f"连接尝试 {attempt + 1}/{max_retries} 失败: {e}")
+                logger.warning(f"接続試行 {attempt + 1}/{max_retries} 失敗: {e}")
                 await asyncio.sleep(1)
-        
-        logger.error("无法连接到Edge浏览器")
+
+        logger.error("Edgeブラウザに接続できません")
         return False
-    
+
     async def disconnect(self):
-        """断开与Edge的连接（不关闭Edge）"""
+        """Edgeとの接続を切断（Edgeは終了しない）"""
         if self._browser:
-            # 注意：只是断开连接，不关闭浏览器
+            # 注意：接続を切断するだけで、ブラウザは閉じない
             try:
-                # 关闭我们创建的会话页面
+                # 作成したセッションページを閉じる
                 for session in list(self._sessions.values()):
                     try:
                         await session.page.close()
@@ -192,41 +197,41 @@ class EdgeManager:
                 self._sessions.clear()
             except:
                 pass
-            
+
             self._browser = None
             self._context = None
-        
+
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
-        
+
         self._connected = False
-        logger.info("已断开与Edge的连接")
-    
+        logger.info("Edgeとの接続を切断しました")
+
     @asynccontextmanager
     async def acquire_session(self):
-        """获取一个可用的浏览器会话"""
+        """利用可能なブラウザセッションを取得"""
         if not self._connected:
             connected = await self.connect_to_edge()
             if not connected:
-                raise RuntimeError("无法连接到Edge浏览器，请确保Edge已启动")
-        
+                raise RuntimeError("Edgeブラウザに接続できません。Edgeが起動していることを確認してください")
+
         session = None
-        
+
         async with self._session_lock:
-            # 查找空闲会话
+            # 空きセッションを検索
             for s in self._sessions.values():
                 if not s.is_busy:
                     session = s
                     session.is_busy = True
                     break
-            
-            # 创建新会话
+
+            # 新しいセッションを作成
             if session is None and len(self._sessions) < self.settings.max_sessions:
                 session = await self._create_session()
                 session.is_busy = True
-        
-        # 等待可用会话
+
+        # 利用可能なセッションを待機
         if session is None:
             for _ in range(30):
                 await asyncio.sleep(1)
@@ -238,42 +243,174 @@ class EdgeManager:
                             break
                 if session:
                     break
-        
+
         if session is None:
-            raise TimeoutError("无法获取可用会话")
-        
+            raise TimeoutError("利用可能なセッションを取得できません")
+
         try:
             session.mark_used()
             yield session
         finally:
             session.is_busy = False
-    
+
+    @asynccontextmanager
+    async def acquire_conversation_session(
+        self,
+        conversation_id: Optional[str] = None,
+        new_conversation: bool = False
+    ):
+        """
+        会話IDに紐づくブラウザセッションを取得
+
+        - new_conversation=True: 空きセッションを取得し、新しいconversation_idを生成して紐づけ
+        - conversation_id指定: 紐づけられたセッションを返却（ビジーの場合は待機）
+        - いずれもなし: 空きセッションを取得し、conversation_idを生成（後方互換）
+        """
+        # 期限切れセッションをクリーンアップ
+        await self._cleanup_expired_conversations()
+
+        if not self._connected:
+            connected = await self.connect_to_edge()
+            if not connected:
+                raise RuntimeError("Edgeブラウザに接続できません。Edgeが起動していることを確認してください")
+
+        session = None
+        conv_id = conversation_id
+
+        if new_conversation:
+            # 新規セッションを強制
+            conv_id = f"conv-{uuid.uuid4().hex[:12]}"
+            session = await self._acquire_any_idle_session()
+            async with self._session_lock:
+                self._conversations[conv_id] = session.session_id
+                self._conversation_timeouts[conv_id] = datetime.now()
+            logger.info(f"新規セッション: {conv_id} -> session {session.session_id}")
+
+        elif conv_id and conv_id in self._conversations:
+            # 既存セッションを継続
+            target_session_id = self._conversations[conv_id]
+            session = await self._acquire_specific_session(target_session_id)
+            async with self._session_lock:
+                self._conversation_timeouts[conv_id] = datetime.now()
+            logger.info(f"セッション継続: {conv_id} -> session {target_session_id}")
+
+        else:
+            # conversation_id未指定または無効、空きセッションを取得
+            conv_id = f"conv-{uuid.uuid4().hex[:12]}"
+            session = await self._acquire_any_idle_session()
+            async with self._session_lock:
+                self._conversations[conv_id] = session.session_id
+                self._conversation_timeouts[conv_id] = datetime.now()
+            logger.info(f"セッション割り当て: {conv_id} -> session {session.session_id}")
+
+        try:
+            session.mark_used()
+            yield session, conv_id
+        finally:
+            session.is_busy = False
+
+    async def _acquire_any_idle_session(self) -> BrowserSession:
+        """任意の空きセッションを取得"""
+        session = None
+        async with self._session_lock:
+            for s in self._sessions.values():
+                if not s.is_busy:
+                    session = s
+                    session.is_busy = True
+                    break
+            if session is None and len(self._sessions) < self.settings.max_sessions:
+                session = await self._create_session()
+                session.is_busy = True
+
+        if session is None:
+            # 利用可能なセッションを待機
+            for _ in range(30):
+                await asyncio.sleep(1)
+                async with self._session_lock:
+                    for s in self._sessions.values():
+                        if not s.is_busy:
+                            session = s
+                            session.is_busy = True
+                            break
+                if session:
+                    break
+
+        if session is None:
+            raise TimeoutError("利用可能なセッションを取得できません")
+        return session
+
+    async def _acquire_specific_session(self, session_id: str) -> BrowserSession:
+        """指定IDのセッションを取得（ビジーの場合は待機）"""
+        for _ in range(30):
+            async with self._session_lock:
+                session = self._sessions.get(session_id)
+                if session and not session.is_busy:
+                    session.is_busy = True
+                    return session
+            await asyncio.sleep(1)
+
+        raise TimeoutError(f"セッション {session_id} のタイムアウト待機")
+
+    async def _cleanup_expired_conversations(self):
+        """期限切れの会話バインディングをクリーンアップ"""
+        now = datetime.now()
+        expired = []
+        async with self._session_lock:
+            for conv_id, last_active in self._conversation_timeouts.items():
+                if (now - last_active).total_seconds() > self._conversation_timeout_seconds:
+                    expired.append(conv_id)
+            for conv_id in expired:
+                self._conversations.pop(conv_id, None)
+                self._conversation_timeouts.pop(conv_id, None)
+                logger.info(f"セッションタイムアウトクリーンアップ: {conv_id}")
+
+    def list_conversations(self) -> List[Dict]:
+        """アクティブな会話を一覧表示"""
+        result = []
+        for conv_id, session_id in self._conversations.items():
+            last_active = self._conversation_timeouts.get(conv_id)
+            result.append({
+                "conversation_id": conv_id,
+                "session_id": session_id,
+                "last_active": last_active.isoformat() if last_active else None,
+            })
+        return result
+
+    def remove_conversation(self, conversation_id: str) -> bool:
+        """会話バインディングを削除"""
+        if conversation_id in self._conversations:
+            self._conversations.pop(conversation_id, None)
+            self._conversation_timeouts.pop(conversation_id, None)
+            logger.info(f"会話を削除: {conversation_id}")
+            return True
+        return False
+
     async def _create_session(self) -> BrowserSession:
-        """创建新会话"""
+        """新しいセッションを作成"""
         session_id = str(uuid.uuid4())[:8]
-        
-        # 在已有上下文中创建新页面
+
+        # 既存のコンテキストに新しいページを作成
         page = await self._context.new_page()
-        
+
         session = BrowserSession(
             session_id=session_id,
             page=page
         )
         self._sessions[session_id] = session
-        
-        logger.info(f"创建新会话: {session_id}")
+
+        logger.info(f"新しいセッションを作成: {session_id}")
         return session
-    
+
     @property
     def is_connected(self) -> bool:
         return self._connected
-    
+
     @property
     def session_count(self) -> int:
         return len(self._sessions)
 
 
-# 全局实例
+# グローバルインスタンス
 edge_manager = EdgeManager()
 
 
@@ -281,171 +418,171 @@ async def get_edge_manager() -> EdgeManager:
     return edge_manager
 
 
-# ========== CLI命令 ==========
+# ========== CLIコマンド ==========
 
 async def cmd_start_edge():
-    """启动Edge并等待用户登录"""
+    """Edgeを起動し、ユーザーのログインを待機"""
     manager = EdgeManager()
     settings = get_settings()
-    
+
     print("\n" + "=" * 60)
-    print("    长驻Edge进程启动器")
+    print("    常駐Edgeプロセス起動ツール")
     print("=" * 60)
     print()
-    print(f"即将启动Edge浏览器（调试端口: {settings.edge_debug_port}）")
+    print(f"Edgeブラウザを起動します（デバッグポート: {settings.edge_debug_port}）")
     print()
-    print("请完成以下步骤：")
-    print("  1. 等待Edge浏览器启动")
-    print("  2. 在Edge中访问AI工具并登录")
-    print("  3. 登录成功后，保持Edge运行")
-    print("  4. 在另一个终端启动API服务")
+    print("以下の手順を実行してください：")
+    print("  1. Edgeブラウザの起動を待機")
+    print("  2. EdgeでAIツールにアクセスしてログイン")
+    print("  3. ログイン成功後、Edgeを稼働させたまま維持")
+    print("  4. 別のターミナルでAPIサービスを起動")
     print()
-    print("注意：请勿关闭此终端或Edge浏览器！")
+    print("注意：このターミナルとEdgeブラウザを閉じないでください！")
     print("=" * 60)
     print()
-    
-    # 启动Edge
+
+    # Edgeを起動
     process = manager.start_edge_with_debug()
-    
-    # 等待Edge启动
+
+    # Edgeの起動を待機
     await asyncio.sleep(3)
-    
-    # 尝试连接
+
+    # 接続を試行
     connected = await manager.connect_to_edge()
-    
+
     if connected:
-        # 打开AI工具页面
+        # AIツールページを開く
         async with manager.acquire_session() as session:
             await session.page.goto(settings.ai_tool_url)
-        
+
         print()
-        print("✓ Edge已启动！")
-        print(f"✓ 已打开: {settings.ai_tool_url}")
+        print("✓ Edgeが起動しました！")
+        print(f"✓ 開きました: {settings.ai_tool_url}")
         print()
-        print("请在Edge中完成登录...")
-        print("登录后，请打开新终端运行: uvicorn app.main:app --port 8000")
+        print("Edgeでログインを完了してください...")
+        print("ログイン後、新しいターミナルで実行: uvicorn app.main:app --port 8000")
         print()
-        print("按 Ctrl+C 关闭Edge并退出")
-        
+        print("Ctrl+C でEdgeを閉じて終了")
+
         try:
-            # 保持运行
+            # 稼働を維持
             while True:
                 await asyncio.sleep(1)
-                # 检查Edge进程是否还在运行
+                # Edgeプロセスがまだ稼働中か確認
                 if process.poll() is not None:
-                    print("\nEdge已关闭")
+                    print("\nEdgeが閉じられました")
                     break
         except KeyboardInterrupt:
-            print("\n正在关闭...")
+            print("\n終了中...")
     else:
-        print("✗ 无法连接到Edge")
+        print("✗ Edgeに接続できません")
         process.terminate()
 
 
 async def cmd_check_status():
-    """检查Edge连接状态"""
+    """Edge接続状態を確認"""
     manager = EdgeManager()
 
-    print("检查Edge连接状态...")
+    print("Edge接続状態を確認中...")
 
     connected = await manager.connect_to_edge(max_retries=3)
 
     if connected:
-        print("✓ Edge已连接")
-        print(f"  会话数: {manager.session_count}")
+        print("✓ Edge接続済み")
+        print(f"  セッション数: {manager.session_count}")
 
-        # 尝试访问页面
+        # ページへのアクセスを試行
         try:
             async with manager.acquire_session() as session:
                 url = session.page.url
                 title = await session.page.title()
-                print(f"  当前URL: {url}")
-                print(f"  页面标题: {title}")
+                print(f"  現在のURL: {url}")
+                print(f"  ページタイトル: {title}")
         except Exception as e:
-            print(f"  获取页面信息失败: {e}")
+            print(f"  ページ情報取得失敗: {e}")
 
         await manager.disconnect()
     else:
-        print("✗ Edge未连接")
+        print("✗ Edge未接続")
         print()
-        print("请先运行: python -m app.edge_manager start")
+        print("先に実行してください: python -m app.edge_manager start")
 
 
 def cmd_start_all_sync():
-    """一体化启动：Edge + API服务（同步版本）"""
+    """一括起動：Edge + APIサービス（同期版）"""
     import uvicorn
     import time
 
     settings = get_settings()
 
     print("\n" + "=" * 60)
-    print("    内部AI工具API - 一体化启动")
+    print("    社内AIツールAPI - 一括起動")
     print("=" * 60)
     print()
-    print(f"即将启动Edge浏览器（调试端口: {settings.edge_debug_port}）")
+    print(f"Edgeブラウザを起動します（デバッグポート: {settings.edge_debug_port}）")
     print()
 
-    # 启动Edge（不使用单例，避免跨事件循环问题）
+    # Edgeを起動（シングルトンを使用せず、イベントループの競合を回避）
     manager = EdgeManager()
     process = manager.start_edge_with_debug()
 
-    # 等待Edge启动
-    print("等待Edge启动...")
+    # Edgeの起動を待機
+    print("Edgeの起動を待機中...")
     time.sleep(3)
 
-    # 检查Edge进程是否运行
+    # Edgeプロセスが稼働しているか確認
     if process.poll() is not None:
-        print("✗ Edge启动失败")
+        print("✗ Edgeの起動に失敗しました")
         return
 
-    # 使用简单的HTTP请求检查CDP端口是否可用
+    # 簡易HTTPリクエストでCDPポートの準備を確認
     import urllib.request
     cdp_url = f"http://127.0.0.1:{settings.edge_debug_port}/json/version"
     for i in range(10):
         try:
             urllib.request.urlopen(cdp_url, timeout=2)
-            print("✓ Edge CDP端口已就绪")
+            print("✓ Edge CDPポート準備完了")
             break
         except:
             time.sleep(1)
     else:
-        print("✗ 无法连接到Edge CDP端口")
+        print("✗ Edge CDPポートに接続できません")
         process.terminate()
         return
 
     print()
-    print("✓ Edge已启动！")
-    print(f"  请在Edge中访问: {settings.ai_tool_url}")
+    print("✓ Edgeが起動しました！")
+    print(f"  Edgeで以下にアクセスしてください: {settings.ai_tool_url}")
     print()
     print("=" * 60)
-    print("  请在Edge中完成登录")
-    print("  登录完成后，按 Enter 键启动API服务...")
+    print("  Edgeでログインを完了してください")
+    print("  ログイン完了後、Enterキーを押してAPIサービスを起動...")
     print("=" * 60)
     print()
 
-    # 等待用户按Enter
+    # ユーザーのEnterキーを待機
     try:
-        input(">>> 按 Enter 键继续...")
+        input(">>> Enterキーを押して続行...")
     except EOFError:
         pass
 
-    # 检查Edge是否还在运行
+    # Edgeがまだ稼働しているか確認
     if process.poll() is not None:
-        print("\n✗ Edge已关闭，无法启动API服务")
+        print("\n✗ Edgeが閉じられました。APIサービスを起動できません")
         return
 
-    # 重置单例状态，让API服务重新初始化
+    # シングルトン状態をリセット、APIサービスの再初期化を許可
     EdgeManager._instance = None
 
     print()
     print("=" * 60)
-    print("  正在启动API服务...")
-    print(f"  API地址: http://{settings.api_host}:{settings.api_port}")
-    print("  按 Ctrl+C 停止服务")
+    print("  APIサービスを起動中...")
+    print(f"  APIアドレス: http://{settings.api_host}:{settings.api_port}")
+    print("  Ctrl+C でサービスを停止")
     print("=" * 60)
     print()
 
-    # 启动API服务（阻塞）
+    # APIサービスを起動（ブロッキング）
     try:
         uvicorn.run(
             "app.main:app",
@@ -454,11 +591,11 @@ def cmd_start_all_sync():
             log_level="info"
         )
     except KeyboardInterrupt:
-        print("\n正在关闭...")
+        print("\n終了中...")
     finally:
-        # 关闭Edge进程
+        # Edgeプロセスを終了
         if process.poll() is None:
-            print("关闭Edge浏览器...")
+            print("Edgeブラウザを終了中...")
             process.terminate()
             try:
                 process.wait(timeout=5)
@@ -469,12 +606,12 @@ def cmd_start_all_sync():
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("""
-用法: python -m app.edge_manager <命令>
+使用方法: python -m app.edge_manager <コマンド>
 
-命令:
-  start    启动Edge浏览器（带调试端口）
-  status   检查Edge连接状态
-  all      一体化启动（Edge + API服务）
+コマンド:
+  start    Edgeブラウザを起動（デバッグポート付き）
+  status   Edge接続状態を確認
+  all      一括起動（Edge + APIサービス）
 """)
         sys.exit(0)
 
@@ -487,4 +624,4 @@ if __name__ == "__main__":
     elif cmd == "all":
         cmd_start_all_sync()
     else:
-        print(f"未知命令: {cmd}")
+        print(f"不明なコマンド: {cmd}")

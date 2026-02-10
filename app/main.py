@@ -1,4 +1,4 @@
-"""FastAPI主入口"""
+"""FastAPIメインエントリーポイント"""
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +11,7 @@ from .routers import chat_router
 from .models import HealthResponse
 
 
-# 日志配置
+# ログ設定
 logger.remove()
 logger.add(sys.stdout, format="<green>{time:HH:mm:ss}</green> | <level>{level: <7}</level> | {message}")
 logger.add("logs/api_{time}.log", rotation="100 MB", retention="7 days")
@@ -19,24 +19,24 @@ logger.add("logs/api_{time}.log", rotation="100 MB", retention="7 days")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("启动API服务...")
-    
-    # 尝试连接到Edge
+    logger.info("APIサービスを起動中...")
+
+    # Edgeへの接続を試行
     connected = await edge_manager.connect_to_edge(max_retries=3)
     if connected:
-        logger.info("✓ 已连接到Edge浏览器")
+        logger.info("✓ Edgeブラウザに接続完了")
     else:
-        logger.warning("✗ 未连接到Edge，请先运行: python -m app.edge_manager start")
-    
+        logger.warning("✗ Edge未接続。先に実行してください: python -m app.edge_manager start")
+
     yield
-    
-    logger.info("关闭API服务...")
+
+    logger.info("APIサービスを終了中...")
     await edge_manager.disconnect()
 
 
 app = FastAPI(
-    title="内部AI工具API",
-    description="企业环境 - 长驻Edge进程方案",
+    title="社内AIツールAPI",
+    description="エンタープライズ環境 - 常駐Edgeプロセス方式",
     version="2.0.0",
     lifespan=lifespan
 )
@@ -64,7 +64,7 @@ async def health():
 @app.get("/")
 async def root():
     return {
-        "name": "内部AI工具API",
+        "name": "社内AIツールAPI",
         "version": "2.0.0",
         "edge_connected": edge_manager.is_connected,
         "docs": "/docs"

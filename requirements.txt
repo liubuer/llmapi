@@ -1,28 +1,28 @@
-# Web框架
+# Webフレームワーク
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
 
-# 浏览器自动化
+# ブラウザ自動化
 playwright>=1.40.0
 
-# 数据验证
+# データバリデーション
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 
-# HTTP客户端
+# HTTPクライアント
 httpx>=0.25.0
 
-# 环境变量
+# 環境変数
 python-dotenv>=1.0.0
 
-# 日志
+# ログ
 loguru>=0.7.2
 
-# SSE支持
+# SSEサポート
 sse-starlette>=1.8.0
 
-# LangChain（示例用）
+# LangChain（サンプル用）
 langchain>=0.1.0
 langchain-openai>=0.0.5
 openai>=1.6.0

@@ -1,4 +1,4 @@
-"""数据模型 - OpenAI API兼容格式"""
+"""データモデル - OpenAI API互換フォーマット"""
 from pydantic import BaseModel, Field
 from typing import Optional, List, Union, Literal
 import time
@@ -18,6 +18,7 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
     new_conversation: Optional[bool] = False
+    conversation_id: Optional[str] = None
 
 
 class ChatCompletionChoice(BaseModel):
@@ -39,6 +40,7 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: List[ChatCompletionChoice]
     usage: Optional[Usage] = None
+    conversation_id: Optional[str] = None
 
 
 class ModelInfo(BaseModel):

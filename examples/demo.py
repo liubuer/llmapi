@@ -1,25 +1,25 @@
-"""使用示例"""
+"""使用例デモ"""
 import openai
 
-# 配置
+# 設定
 client = openai.OpenAI(
     base_url="http://localhost:8000/v1",
     api_key="not-needed"
 )
 
-# 基础对话
+# 基本的な会話
 def basic_chat():
     response = client.chat.completions.create(
         model="gpt-5",
-        messages=[{"role": "user", "content": "你好，请简单介绍一下你自己"}]
+        messages=[{"role": "user", "content": "こんにちは、自己紹介をしてください"}]
     )
     print(response.choices[0].message.content)
 
-# 流式输出
+# ストリーミング出力
 def streaming_chat():
     stream = client.chat.completions.create(
         model="gpt-5",
-        messages=[{"role": "user", "content": "讲一个简短的笑话"}],
+        messages=[{"role": "user", "content": "短いジョークを一つ教えてください"}],
         stream=True
     )
     for chunk in stream:
@@ -27,23 +27,23 @@ def streaming_chat():
             print(chunk.choices[0].delta.content, end="", flush=True)
     print()
 
-# LangChain示例
+# LangChain使用例
 def langchain_example():
     from langchain_openai import ChatOpenAI
-    
+
     llm = ChatOpenAI(
         base_url="http://localhost:8000/v1",
         api_key="not-needed",
         model="gpt-5"
     )
-    
-    response = llm.invoke("什么是机器学习？")
+
+    response = llm.invoke("機械学習とは何ですか？")
     print(response.content)
 
 
 if __name__ == "__main__":
-    print("=== 基础对话 ===")
+    print("=== 基本的な会話 ===")
     basic_chat()
-    
-    print("\n=== 流式输出 ===")
+
+    print("\n=== ストリーミング出力 ===")
     streaming_chat()

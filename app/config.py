@@ -1,36 +1,36 @@
-"""配置管理"""
+"""設定管理"""
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from pathlib import Path
 
 
 class Settings(BaseSettings):
-    # AI工具配置
+    # AIツール設定
     ai_tool_url: str = Field(default="https://taa.xxx.co.jp")
-    
-    # Edge调试端口（用于连接已运行的Edge）
+
+    # Edgeデバッグポート（稼働中のEdgeへの接続用）
     edge_debug_port: int = Field(default=9222)
-    
-    # 浏览器配置
+
+    # ブラウザ設定
     browser_slow_mo: int = Field(default=100)
-    
-    # 会话配置
+
+    # セッション設定
     max_sessions: int = Field(default=3)
-    
-    # 超时配置
+
+    # タイムアウト設定
     response_timeout: int = Field(default=120)
     max_input_chars: int = Field(default=50000)
-    
-    # API配置
+
+    # API設定
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
-    
-    # 页面选择器
+
+    # ページセレクター
     selector_input: str = Field(
         default="textarea, [contenteditable='true'], input[type='text']"
     )
     selector_send_button: str = Field(
-        default="button[type='submit'], button:has-text('发送'), button:has-text('Send'), button:has-text('送信')"
+        default="button[type='submit'], button:has-text('発送'), button:has-text('Send'), button:has-text('送信')"
     )
     selector_response: str = Field(
         default="div[class*='response'], div[class*='message'], div[class*='answer'], div.markdown"
@@ -39,10 +39,10 @@ class Settings(BaseSettings):
         default="div[class*='loading'], div[class*='typing'], span[class*='cursor']"
     )
     selector_new_chat: str = Field(
-        default="button:has-text('新对话'), button:has-text('New'), a[href*='new']"
+        default="button:has-text('新規チャット'), button:has-text('New'), a[href*='new']"
     )
 
-    # 模型选择器
+    # モデルセレクター
     selector_model_button: str = Field(
         default="button[id^='mantine-'][id$='-target'][aria-haspopup='menu']"
     )
@@ -50,12 +50,12 @@ class Settings(BaseSettings):
         default="div.mantine-Menu-itemLabel"
     )
 
-    # 默认模型
+    # デフォルトモデル
     default_model: str = Field(default="GPT-5")
 
-    # 大文本分割配置
-    chunk_size: int = Field(default=45000)  # 每块大小（留5000字符余量给提示词）
-    chunk_overlap: int = Field(default=200)  # 重叠字符数，确保上下文连贯
+    # 長文テキスト分割設定
+    chunk_size: int = Field(default=45000)  # チャンクサイズ（プロンプト用に5000文字の余裕を確保）
+    chunk_overlap: int = Field(default=200)  # オーバーラップ文字数、コンテキストの一貫性を確保
 
     class Config:
         env_file = ".env"
